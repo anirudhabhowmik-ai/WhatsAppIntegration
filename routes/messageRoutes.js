@@ -4,8 +4,8 @@ import parseMessage from "../services/parserService.js";
 
 const router = express.Router();
 
-// Create transaction - Store directly in customer (NO separate Transaction model)
-router.post("/", async (req, res) => {
+// Create transaction - REMOVED 'next' parameter
+router.post("/", async (req, res) => {  // Make sure NO 'next' here
   try {
     const { message } = req.body;
 
@@ -16,7 +16,6 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Using Gemini AI parser
     const parsedData = await parseMessage(message);
     const {
       customerName,
@@ -29,23 +28,15 @@ router.post("/", async (req, res) => {
       originalMessage,
     } = parsedData;
 
-    console.log("📝 Gemini Parsed:", {
-      customerName,
-      quantity,
-      itemName,
-      amount,
-      paid,
-    });
+    console.log("📝 Gemini Parsed:", { customerName, quantity, itemName, amount });
 
     if (amount === 0) {
       return res.status(400).json({
         success: false,
         message: "Could not extract amount. Use format: 'Ravi 2 milk 40 rs'",
-        example: "Ravi 2 milk 40 rs",
       });
     }
 
-    // Find or create customer (case insensitive)
     let customer = await Customer.findOne({
       name: { $regex: new RegExp(`^${customerName}$`, "i") },
     });
@@ -53,29 +44,25 @@ router.post("/", async (req, res) => {
     let isNewCustomer = false;
 
     if (!customer) {
-      // Create new customer with first transaction embedded
       customer = new Customer({
         name: customerName,
         phone: phone || "",
         totalAmount: amount,
         totalPaid: paid || 0,
         totalDue: amount - (paid || 0),
-        transactions: [
-          {
-            itemName: itemName,
-            itemDescription: itemDescription || "",
-            quantity: quantity,
-            amount: amount,
-            paid: paid || 0,
-            transactionType: "debit",
-            originalMessage: originalMessage,
-            date: new Date(),
-          },
-        ],
+        transactions: [{
+          itemName: itemName,
+          itemDescription: itemDescription || "",
+          quantity: quantity,
+          amount: amount,
+          paid: paid || 0,
+          transactionType: "debit",
+          originalMessage: originalMessage,
+          date: new Date(),
+        }],
       });
       isNewCustomer = true;
     } else {
-      // Add transaction to existing customer's embedded transactions array
       customer.transactions.push({
         itemName: itemName,
         itemDescription: itemDescription || "",
@@ -87,7 +74,6 @@ router.post("/", async (req, res) => {
         date: new Date(),
       });
 
-      // Update totals
       customer.totalAmount += amount;
       customer.totalPaid += paid || 0;
       customer.totalDue = customer.totalAmount - customer.totalPaid;
@@ -96,8 +82,8 @@ router.post("/", async (req, res) => {
     await customer.save();
 
     const replyMessage = isNewCustomer
-      ? `✅ NEW CUSTOMER CREATED!\n\n👤 Name: ${customerName}\n📝 Purchase: ${quantity} ${itemName}\n💰 Amount: ₹${amount}\n💰 Paid: ₹${paid || 0}\n📊 Total Due: ₹${customer.totalDue}`
-      : `✅ ACCOUNT UPDATED!\n\n👤 Customer: ${customerName}\n📝 Purchase: ${quantity} ${itemName}\n💰 Amount: ₹${amount}\n💰 Paid: ₹${paid || 0}\n📊 New Total Due: ₹${customer.totalDue}`;
+      ? `✅ NEW CUSTOMER CREATED!\n\n👤 Name: ${customerName}\n📝 Purchase: ${quantity} ${itemName}\n💰 Amount: ₹${amount}\n📊 Total Due: ₹${customer.totalDue}`
+      : `✅ ACCOUNT UPDATED!\n\n👤 Customer: ${customerName}\n📝 Purchase: ${quantity} ${itemName}\n💰 Amount: ₹${amount}\n📊 New Total Due: ₹${customer.totalDue}`;
 
     res.status(201).json({
       success: true,
@@ -107,11 +93,9 @@ router.post("/", async (req, res) => {
         customer: {
           id: customer._id,
           name: customer.name,
-          phone: customer.phone,
           totalAmount: customer.totalAmount,
           totalPaid: customer.totalPaid,
           totalDue: customer.totalDue,
-          transactionsCount: customer.transactions.length,
         },
       },
     });
@@ -124,22 +108,15 @@ router.post("/", async (req, res) => {
   }
 });
 
-// Get all customers
+// Get all customers - REMOVED 'next'
 router.get("/customers", async (req, res) => {
   try {
     const customers = await Customer.find().sort({ createdAt: -1 });
     const totalDue = customers.reduce((sum, c) => sum + (c.totalDue || 0), 0);
-    const totalAmount = customers.reduce(
-      (sum, c) => sum + (c.totalAmount || 0),
-      0,
-    );
-    const totalPaid = customers.reduce((sum, c) => sum + (c.totalPaid || 0), 0);
 
     res.json({
       success: true,
       count: customers.length,
-      totalAmount: totalAmount,
-      totalPaid: totalPaid,
       totalDue: totalDue,
       customers: customers.map((c) => ({
         id: c._id,
@@ -149,7 +126,6 @@ router.get("/customers", async (req, res) => {
         totalPaid: c.totalPaid || 0,
         totalDue: c.totalDue || 0,
         transactionsCount: c.transactions?.length || 0,
-        createdAt: c.createdAt,
       })),
     });
   } catch (error) {
@@ -161,7 +137,7 @@ router.get("/customers", async (req, res) => {
   }
 });
 
-// Get single customer with all transactions
+// Get single customer - REMOVED 'next'
 router.get("/customers/:id", async (req, res) => {
   try {
     const customer = await Customer.findById(req.params.id);
@@ -182,15 +158,8 @@ router.get("/customers/:id", async (req, res) => {
         totalAmount: customer.totalAmount || 0,
         totalPaid: customer.totalPaid || 0,
         totalDue: customer.totalDue || 0,
-        createdAt: customer.createdAt,
-        updatedAt: customer.updatedAt,
       },
-      transactions: customer.transactions
-        ? [...customer.transactions].sort(
-            (a, b) => new Date(b.date) - new Date(a.date),
-          )
-        : [],
-      totalTransactions: customer.transactions?.length || 0,
+      transactions: customer.transactions?.sort((a, b) => new Date(b.date) - new Date(a.date)) || [],
     });
   } catch (error) {
     console.error("Error:", error);
@@ -201,7 +170,7 @@ router.get("/customers/:id", async (req, res) => {
   }
 });
 
-// Record payment
+// Record payment - REMOVED 'next'
 router.post("/payment", async (req, res) => {
   try {
     const { customerName, amount, note } = req.body;
@@ -234,7 +203,6 @@ router.post("/payment", async (req, res) => {
 
     const previousDue = customer.totalDue || 0;
 
-    // Add payment transaction to embedded transactions array
     customer.transactions.push({
       itemName: "Payment Received",
       amount: paymentAmount,
@@ -244,7 +212,6 @@ router.post("/payment", async (req, res) => {
       date: new Date(),
     });
 
-    // Update totals
     customer.totalPaid = (customer.totalPaid || 0) + paymentAmount;
     customer.totalDue = (customer.totalAmount || 0) - (customer.totalPaid || 0);
 
@@ -253,15 +220,6 @@ router.post("/payment", async (req, res) => {
     res.json({
       success: true,
       message: `✅ Payment received from ${customerName}\n💰 Amount: ₹${paymentAmount}\n📊 Previous Due: ₹${previousDue}\n📊 New Due: ₹${customer.totalDue}`,
-      data: {
-        customer: {
-          id: customer._id,
-          name: customer.name,
-          totalAmount: customer.totalAmount || 0,
-          totalPaid: customer.totalPaid || 0,
-          totalDue: customer.totalDue || 0,
-        },
-      },
     });
   } catch (error) {
     console.error("Error:", error);
@@ -272,15 +230,12 @@ router.post("/payment", async (req, res) => {
   }
 });
 
-// Get dashboard summary
+// Dashboard summary - REMOVED 'next'
 router.get("/summary", async (req, res) => {
   try {
     const customers = await Customer.find();
 
-    const totalAmount = customers.reduce(
-      (sum, c) => sum + (c.totalAmount || 0),
-      0,
-    );
+    const totalAmount = customers.reduce((sum, c) => sum + (c.totalAmount || 0), 0);
     const totalPaid = customers.reduce((sum, c) => sum + (c.totalPaid || 0), 0);
     const totalDue = customers.reduce((sum, c) => sum + (c.totalDue || 0), 0);
 
@@ -291,30 +246,16 @@ router.get("/summary", async (req, res) => {
     let todayPayments = 0;
 
     customers.forEach((customer) => {
-      if (customer.transactions) {
-        customer.transactions.forEach((transaction) => {
-          if (transaction.date && new Date(transaction.date) >= today) {
-            if (transaction.transactionType === "debit") {
-              todaySales += transaction.amount || 0;
-            } else if (transaction.transactionType === "payment") {
-              todayPayments += transaction.amount || 0;
-            }
+      customer.transactions?.forEach((transaction) => {
+        if (transaction.date && new Date(transaction.date) >= today) {
+          if (transaction.transactionType === "debit") {
+            todaySales += transaction.amount || 0;
+          } else if (transaction.transactionType === "payment") {
+            todayPayments += transaction.amount || 0;
           }
-        });
-      }
+        }
+      });
     });
-
-    const topCustomers = [...customers]
-      .sort((a, b) => (b.totalDue || 0) - (a.totalDue || 0))
-      .slice(0, 5)
-      .map((c) => ({
-        id: c._id,
-        name: c.name,
-        phone: c.phone,
-        totalDue: c.totalDue || 0,
-        totalAmount: c.totalAmount || 0,
-        totalPaid: c.totalPaid || 0,
-      }));
 
     res.json({
       success: true,
@@ -323,14 +264,10 @@ router.get("/summary", async (req, res) => {
         totalAmount: totalAmount,
         totalPaid: totalPaid,
         totalDue: totalDue,
-        totalTransactions: customers.reduce(
-          (sum, c) => sum + (c.transactions?.length || 0),
-          0,
-        ),
+        totalTransactions: customers.reduce((sum, c) => sum + (c.transactions?.length || 0), 0),
         todaySales: todaySales,
         todayPayments: todayPayments,
         netToday: todaySales - todayPayments,
-        topCustomers: topCustomers,
       },
     });
   } catch (error) {
