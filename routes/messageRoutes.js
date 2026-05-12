@@ -1,46 +1,11 @@
 import express from "express";
 import Customer from "../models/Customer.js";
 import Transaction from "../models/Transaction.js";
+import parseMessage from "../services/parserService.js"; // Import Gemini parser
 
 const router = express.Router();
 
-// Parse message helper
-const parseMessage = (message) => {
-  const words = message.trim().split(/\s+/);
-  const customerName = words[0] || "Unknown";
-  let quantity = 1;
-  let itemName = "";
-  let amount = 0;
-  
-  // Find quantity (first number)
-  for (let i = 0; i < words.length; i++) {
-    if (!isNaN(words[i]) && words[i].trim() !== "") {
-      quantity = parseInt(words[i]);
-      break;
-    }
-  }
-  
-  // Find amount (last number)
-  const numbers = message.match(/\d+/g);
-  if (numbers && numbers.length > 0) {
-    amount = parseInt(numbers[numbers.length - 1]);
-  }
-  
-  // Extract item name
-  const quantityIndex = words.findIndex(w => !isNaN(w));
-  if (quantityIndex !== -1 && amount > 0) {
-    const amountIndex = message.lastIndexOf(amount.toString());
-    const beforeAmount = message.substring(0, amountIndex);
-    const afterQuantity = beforeAmount.substring(beforeAmount.indexOf(words[quantityIndex]) + words[quantityIndex].length);
-    itemName = afterQuantity.replace(/rs|rupees|₹/gi, '').trim() || "item";
-  } else if (quantityIndex !== -1) {
-    itemName = words.slice(quantityIndex + 1).join(" ").replace(/rs|rupees|₹/gi, '').trim() || "item";
-  }
-  
-  return { customerName, quantity, itemName, amount, originalMessage: message };
-};
-
-// Create transaction
+// Create transaction - NOW USING GEMINI AI
 router.post("/", async (req, res) => {
   try {
     const { message } = req.body;
@@ -52,18 +17,30 @@ router.post("/", async (req, res) => {
       });
     }
 
-    const { customerName, quantity, itemName, amount, originalMessage } = parseMessage(message);
+    // Using Gemini AI parser (async)
+    const parsedData = await parseMessage(message);
+    const { customerName, quantity, itemName, itemDescription, amount, originalMessage } =
+      parsedData;
+
+    console.log("📝 Gemini Parsed:", {
+      customerName,
+      quantity,
+      itemName,
+      itemDescription,
+      amount,
+    });
 
     if (amount === 0) {
       return res.status(400).json({
         success: false,
         message: "Could not extract amount. Use format: 'Ravi 2 milk 40 rs'",
+        example: "Ravi 2 milk 40 rs",
       });
     }
 
     // Find or create customer (case insensitive)
     let customer = await Customer.findOne({
-      name: { $regex: new RegExp(`^${customerName}$`, 'i') },
+      name: { $regex: new RegExp(`^${customerName}$`, "i") },
     });
 
     let isNewCustomer = false;
@@ -98,7 +75,7 @@ router.post("/", async (req, res) => {
       message: replyMessage,
       data: {
         isNewCustomer,
-        parsedData: { customerName, quantity, itemName, amount },
+        parsedData: { customerName, itemName, itemDescription, quantity, amount, totalDue },
         customer: {
           id: customer._id,
           name: customer.name,
@@ -142,10 +119,51 @@ router.get("/customers", async (req, res) => {
   }
 });
 
+// Get single customer with transactions
+router.get("/customers/:id", async (req, res) => {
+  try {
+    const customer = await Customer.findById(req.params.id);
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    const transactions = await Transaction.find({
+      customerName: { $regex: new RegExp(`^${customer.name}$`, "i") },
+    }).sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      customer: customer,
+      transactions: transactions,
+      totalTransactions: transactions.length,
+    });
+  } catch (error) {
+    console.error("Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server Error: " + error.message,
+    });
+  }
+});
+
 // Get all transactions
 router.get("/transactions", async (req, res) => {
   try {
-    const transactions = await Transaction.find().sort({ createdAt: -1 }).limit(100);
+    const { limit = 100, customer } = req.query;
+
+    let query = {};
+    if (customer) {
+      query.customerName = { $regex: new RegExp(`^${customer}$`, "i") };
+    }
+
+    const transactions = await Transaction.find(query)
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit));
+
     const totalAmount = transactions.reduce((sum, t) => sum + t.amount, 0);
 
     res.json({
@@ -176,7 +194,7 @@ router.post("/payment", async (req, res) => {
     }
 
     const customer = await Customer.findOne({
-      name: { $regex: new RegExp(`^${customerName}$`, 'i') },
+      name: { $regex: new RegExp(`^${customerName}$`, "i") },
     });
 
     if (!customer) {
@@ -225,19 +243,31 @@ router.get("/summary", async (req, res) => {
   try {
     const customers = await Customer.find();
     const transactions = await Transaction.find();
-    
+
     const totalDue = customers.reduce((sum, c) => sum + c.totalDue, 0);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
-    const todayTransactions = transactions.filter(t => new Date(t.createdAt) >= today);
+
+    const todayTransactions = transactions.filter(
+      (t) => new Date(t.createdAt) >= today,
+    );
     const todaySales = todayTransactions
-      .filter(t => t.itemName !== "Payment Received")
+      .filter((t) => t.itemName !== "Payment Received")
       .reduce((sum, t) => sum + t.amount, 0);
     const todayPayments = todayTransactions
-      .filter(t => t.itemName === "Payment Received")
+      .filter((t) => t.itemName === "Payment Received")
       .reduce((sum, t) => sum + t.amount, 0);
-    
+
+    // Get top 5 customers by due
+    const topCustomers = [...customers]
+      .sort((a, b) => b.totalDue - a.totalDue)
+      .slice(0, 5)
+      .map((c) => ({
+        id: c._id,
+        name: c.name,
+        totalDue: c.totalDue,
+      }));
+
     res.json({
       success: true,
       summary: {
@@ -247,7 +277,49 @@ router.get("/summary", async (req, res) => {
         todaySales: todaySales,
         todayPayments: todayPayments,
         netToday: todaySales - todayPayments,
+        topCustomers: topCustomers,
+      },
+    });
+  } catch (error) {
+    console.error("Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server Error: " + error.message,
+    });
+  }
+});
+
+// Delete transaction (undo)
+router.delete("/transaction/:id", async (req, res) => {
+  try {
+    const transaction = await Transaction.findById(req.params.id);
+
+    if (!transaction) {
+      return res.status(404).json({
+        success: false,
+        message: "Transaction not found",
+      });
+    }
+
+    // Find and update customer
+    const customer = await Customer.findOne({
+      name: { $regex: new RegExp(`^${transaction.customerName}$`, "i") },
+    });
+
+    if (customer) {
+      if (transaction.transactionType === "debit") {
+        customer.totalDue -= transaction.amount;
+      } else {
+        customer.totalDue += transaction.amount;
       }
+      await customer.save();
+    }
+
+    await Transaction.findByIdAndDelete(req.params.id);
+
+    res.json({
+      success: true,
+      message: "Transaction deleted successfully",
     });
   } catch (error) {
     console.error("Error:", error);

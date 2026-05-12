@@ -13,6 +13,26 @@ const customerSchema = new mongoose.Schema(
       default: "",
     },
 
+    itemName: {
+      type: String,
+      default: "",
+    },
+
+    itemDescription: {
+      type: String,
+      default: "",
+    },
+
+    quantity: {
+      type: Number,
+      deafault: 1,
+    },
+
+    amount:{
+      type: Number,
+      deafault: 0,
+    },
+
     totalDue: {
       type: Number,
       default: 0,
