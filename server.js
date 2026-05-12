@@ -1,46 +1,48 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 import connectDB from "./config/db.js";
 import messageRoutes from "./routes/messageRoutes.js";
 
 dotenv.config();
 
-const app = express();
-
-// Middleware - make sure these are correct
-app.use(cors());
-app.use(express.json());  // This is correct
-app.use(express.urlencoded({ extended: true })); // Add this for form data
-
-// Serve static files if needed
-import path from "path";
-import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const app = express();
+
+// ── Middleware ────────────────────────────────────────────────────────────────
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
 
-// Database Connection
+// ── DB ────────────────────────────────────────────────────────────────────────
 await connectDB();
 
-// Routes
+// ── Routes ────────────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 app.use("/message", messageRoutes);
 
-// Error handling middleware - Add this at the end
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ 
-    success: false, 
-    message: "Something went wrong!", 
-    error: err.message 
-  });
+// ── 404 ───────────────────────────────────────────────────────────────────────
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: "Route not found" });
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+// ── Global error handler (4 params = Express error middleware) ────────────────
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error("💥 Unhandled error:", err.stack);
+  res
+    .status(500)
+    .json({ success: false, message: "Something went wrong: " + err.message });
 });
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

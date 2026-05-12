@@ -4,19 +4,106 @@ import parseMessage from "../services/parserService.js";
 
 const router = express.Router();
 
-// Create transaction - REMOVED 'next' parameter
-router.post("/", async (req, res) => {  // Make sure NO 'next' here
+// ── POST /message/  — main entry point for all chat messages ─────────────────
+router.post("/", async (req, res) => {
   try {
     const { message } = req.body;
-
     if (!message) {
-      return res.status(400).json({
-        success: false,
-        message: "Message is required",
+      return res
+        .status(400)
+        .json({ success: false, message: "Message is required" });
+    }
+
+    const parsed = await parseMessage(message);
+
+    // ── Command: list ─────────────────────────────────────────────────────────
+    if (parsed.command === "list") {
+      const customers = await Customer.find().sort({ createdAt: -1 });
+      if (!customers.length) {
+        return res.json({
+          success: true,
+          message: "📭 No customers yet. Add one like:\n  *Ravi 2 milk 40 rs*",
+        });
+      }
+      const lines = customers.map(
+        (c, i) => `${i + 1}. *${c.name}* — Due: ₹${c.totalDue}`,
+      );
+      return res.json({
+        success: true,
+        message:
+          `👥 *Customer List* (${customers.length})\n\n` + lines.join("\n"),
       });
     }
 
-    const parsedData = await parseMessage(message);
+    // ── Command: due <name> ───────────────────────────────────────────────────
+    if (parsed.command === "due") {
+      const customer = await Customer.findOne({
+        name: { $regex: new RegExp(`^${parsed.customerName}$`, "i") },
+      });
+      if (!customer) {
+        return res
+          .status(404)
+          .json({
+            success: false,
+            message: `❌ Customer "${parsed.customerName}" not found`,
+          });
+      }
+      const recentTx = customer.transactions
+        .slice(-3)
+        .reverse()
+        .map((t) => `  • ${t.itemName} ×${t.quantity} — ₹${t.amount}`)
+        .join("\n");
+
+      return res.json({
+        success: true,
+        message:
+          `👤 *${customer.name}*\n` +
+          `💰 Total: ₹${customer.totalAmount}\n` +
+          `✅ Paid:  ₹${customer.totalPaid}\n` +
+          `📊 Due:   ₹${customer.totalDue}\n\n` +
+          `🧾 Recent:\n${recentTx || "  (none)"}`,
+      });
+    }
+
+    // ── Command: pay <name> <amount> ──────────────────────────────────────────
+    if (parsed.command === "pay") {
+      const customer = await Customer.findOne({
+        name: { $regex: new RegExp(`^${parsed.customerName}$`, "i") },
+      });
+      if (!customer) {
+        return res
+          .status(404)
+          .json({
+            success: false,
+            message: `❌ Customer "${parsed.customerName}" not found`,
+          });
+      }
+
+      const prevDue = customer.totalDue;
+      customer.transactions.push({
+        itemName: "Payment Received",
+        amount: parsed.amount,
+        paid: parsed.amount,
+        transactionType: "payment",
+        originalMessage: `Payment ₹${parsed.amount} from ${parsed.customerName}`,
+        date: new Date(),
+      });
+      customer.totalPaid += parsed.amount;
+      customer.totalAmount += parsed.amount; // keep accounting balanced
+      await customer.save();
+
+      return res.json({
+        success: true,
+        message:
+          `✅ *Payment Received!*\n\n` +
+          `👤 ${customer.name}\n` +
+          `💵 Paid: ₹${parsed.amount}\n` +
+          `📊 Previous Due: ₹${prevDue}\n` +
+          `📊 New Due: ₹${customer.totalDue}`,
+      });
+    }
+
+    // ── Normal transaction ────────────────────────────────────────────────────
     const {
       customerName,
       phone,
@@ -26,70 +113,66 @@ router.post("/", async (req, res) => {  // Make sure NO 'next' here
       amount,
       paid,
       originalMessage,
-    } = parsedData;
+    } = parsed;
 
-    console.log("📝 Gemini Parsed:", { customerName, quantity, itemName, amount });
-
-    if (amount === 0) {
+    if (!amount) {
       return res.status(400).json({
         success: false,
-        message: "Could not extract amount. Use format: 'Ravi 2 milk 40 rs'",
+        message: "❌ Could not read amount.\nTry: *Ravi 2 milk 40 rs*",
       });
     }
 
     let customer = await Customer.findOne({
       name: { $regex: new RegExp(`^${customerName}$`, "i") },
     });
+    const isNew = !customer;
 
-    let isNewCustomer = false;
-
-    if (!customer) {
+    if (isNew) {
       customer = new Customer({
         name: customerName,
         phone: phone || "",
         totalAmount: amount,
         totalPaid: paid || 0,
-        totalDue: amount - (paid || 0),
-        transactions: [{
-          itemName: itemName,
-          itemDescription: itemDescription || "",
-          quantity: quantity,
-          amount: amount,
-          paid: paid || 0,
-          transactionType: "debit",
-          originalMessage: originalMessage,
-          date: new Date(),
-        }],
+        transactions: [
+          {
+            itemName,
+            itemDescription: itemDescription || "",
+            quantity,
+            amount,
+            paid: paid || 0,
+            transactionType: "debit",
+            originalMessage,
+            date: new Date(),
+          },
+        ],
       });
-      isNewCustomer = true;
     } else {
       customer.transactions.push({
-        itemName: itemName,
+        itemName,
         itemDescription: itemDescription || "",
-        quantity: quantity,
-        amount: amount,
+        quantity,
+        amount,
         paid: paid || 0,
         transactionType: "debit",
-        originalMessage: originalMessage,
+        originalMessage,
         date: new Date(),
       });
-
       customer.totalAmount += amount;
       customer.totalPaid += paid || 0;
-      customer.totalDue = customer.totalAmount - customer.totalPaid;
     }
 
     await customer.save();
 
-    const replyMessage = isNewCustomer
-      ? `✅ NEW CUSTOMER CREATED!\n\n👤 Name: ${customerName}\n📝 Purchase: ${quantity} ${itemName}\n💰 Amount: ₹${amount}\n📊 Total Due: ₹${customer.totalDue}`
-      : `✅ ACCOUNT UPDATED!\n\n👤 Customer: ${customerName}\n📝 Purchase: ${quantity} ${itemName}\n💰 Amount: ₹${amount}\n📊 New Total Due: ₹${customer.totalDue}`;
-
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      message: replyMessage,
+      message:
+        (isNew ? `🆕 *New Customer Added!*\n\n` : `✅ *Entry Added!*\n\n`) +
+        `👤 ${customerName}\n` +
+        `🛒 ${quantity} ${itemName} — ₹${amount}\n` +
+        (paid ? `✅ Paid: ₹${paid}\n` : "") +
+        `📊 Total Due: ₹${customer.totalDue}`,
       data: {
-        isNewCustomer,
+        isNew,
         customer: {
           id: customer._id,
           name: customer.name,
@@ -100,54 +183,47 @@ router.post("/", async (req, res) => {  // Make sure NO 'next' here
       },
     });
   } catch (error) {
-    console.error("Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server Error: " + error.message,
-    });
+    console.error("❌ Route error:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Server Error: " + error.message });
   }
 });
 
-// Get all customers - REMOVED 'next'
+// ── GET /message/customers ────────────────────────────────────────────────────
 router.get("/customers", async (req, res) => {
   try {
     const customers = await Customer.find().sort({ createdAt: -1 });
-    const totalDue = customers.reduce((sum, c) => sum + (c.totalDue || 0), 0);
-
+    const totalDue = customers.reduce((s, c) => s + (c.totalDue || 0), 0);
     res.json({
       success: true,
       count: customers.length,
-      totalDue: totalDue,
+      totalDue,
       customers: customers.map((c) => ({
         id: c._id,
         name: c.name,
         phone: c.phone,
-        totalAmount: c.totalAmount || 0,
-        totalPaid: c.totalPaid || 0,
-        totalDue: c.totalDue || 0,
+        totalAmount: c.totalAmount,
+        totalPaid: c.totalPaid,
+        totalDue: c.totalDue,
         transactionsCount: c.transactions?.length || 0,
       })),
     });
   } catch (error) {
-    console.error("Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server Error: " + error.message,
-    });
+    res
+      .status(500)
+      .json({ success: false, message: "Server Error: " + error.message });
   }
 });
 
-// Get single customer - REMOVED 'next'
+// ── GET /message/customers/:id ────────────────────────────────────────────────
 router.get("/customers/:id", async (req, res) => {
   try {
     const customer = await Customer.findById(req.params.id);
-
-    if (!customer) {
-      return res.status(404).json({
-        success: false,
-        message: "Customer not found",
-      });
-    }
+    if (!customer)
+      return res
+        .status(404)
+        .json({ success: false, message: "Customer not found" });
 
     res.json({
       success: true,
@@ -155,104 +231,90 @@ router.get("/customers/:id", async (req, res) => {
         id: customer._id,
         name: customer.name,
         phone: customer.phone,
-        totalAmount: customer.totalAmount || 0,
-        totalPaid: customer.totalPaid || 0,
-        totalDue: customer.totalDue || 0,
+        totalAmount: customer.totalAmount,
+        totalPaid: customer.totalPaid,
+        totalDue: customer.totalDue,
       },
-      transactions: customer.transactions?.sort((a, b) => new Date(b.date) - new Date(a.date)) || [],
+      transactions:
+        customer.transactions?.sort(
+          (a, b) => new Date(b.date) - new Date(a.date),
+        ) || [],
     });
   } catch (error) {
-    console.error("Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server Error: " + error.message,
-    });
+    res
+      .status(500)
+      .json({ success: false, message: "Server Error: " + error.message });
   }
 });
 
-// Record payment - REMOVED 'next'
+// ── POST /message/payment ─────────────────────────────────────────────────────
 router.post("/payment", async (req, res) => {
   try {
     const { customerName, amount, note } = req.body;
-
     if (!customerName || !amount) {
-      return res.status(400).json({
-        success: false,
-        message: "Customer name and amount are required",
-      });
+      return res
+        .status(400)
+        .json({ success: false, message: "Customer name and amount required" });
     }
-
-    const paymentAmount = parseInt(amount);
-    if (isNaN(paymentAmount)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid amount",
-      });
-    }
+    const payAmt = parseInt(amount);
+    if (isNaN(payAmt))
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid amount" });
 
     const customer = await Customer.findOne({
       name: { $regex: new RegExp(`^${customerName}$`, "i") },
     });
+    if (!customer)
+      return res
+        .status(404)
+        .json({ success: false, message: `"${customerName}" not found` });
 
-    if (!customer) {
-      return res.status(404).json({
-        success: false,
-        message: `Customer "${customerName}" not found`,
-      });
-    }
-
-    const previousDue = customer.totalDue || 0;
-
+    const prevDue = customer.totalDue;
     customer.transactions.push({
       itemName: "Payment Received",
-      amount: paymentAmount,
-      paid: paymentAmount,
+      amount: payAmt,
+      paid: payAmt,
       transactionType: "payment",
-      originalMessage: `Payment of ₹${paymentAmount} from ${customerName}. ${note || ""}`,
+      originalMessage: `Payment ₹${payAmt} from ${customerName}. ${note || ""}`,
       date: new Date(),
     });
-
-    customer.totalPaid = (customer.totalPaid || 0) + paymentAmount;
-    customer.totalDue = (customer.totalAmount || 0) - (customer.totalPaid || 0);
-
+    customer.totalPaid += payAmt;
+    customer.totalAmount += payAmt;
     await customer.save();
 
     res.json({
       success: true,
-      message: `✅ Payment received from ${customerName}\n💰 Amount: ₹${paymentAmount}\n📊 Previous Due: ₹${previousDue}\n📊 New Due: ₹${customer.totalDue}`,
+      message:
+        `✅ Payment from ${customerName}\n` +
+        `💰 ₹${payAmt} received\n` +
+        `📊 Previous Due: ₹${prevDue}\n` +
+        `📊 New Due: ₹${customer.totalDue}`,
     });
   } catch (error) {
-    console.error("Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server Error: " + error.message,
-    });
+    res
+      .status(500)
+      .json({ success: false, message: "Server Error: " + error.message });
   }
 });
 
-// Dashboard summary - REMOVED 'next'
+// ── GET /message/summary ──────────────────────────────────────────────────────
 router.get("/summary", async (req, res) => {
   try {
     const customers = await Customer.find();
-
-    const totalAmount = customers.reduce((sum, c) => sum + (c.totalAmount || 0), 0);
-    const totalPaid = customers.reduce((sum, c) => sum + (c.totalPaid || 0), 0);
-    const totalDue = customers.reduce((sum, c) => sum + (c.totalDue || 0), 0);
+    const totalAmount = customers.reduce((s, c) => s + (c.totalAmount || 0), 0);
+    const totalPaid = customers.reduce((s, c) => s + (c.totalPaid || 0), 0);
+    const totalDue = customers.reduce((s, c) => s + (c.totalDue || 0), 0);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-
-    let todaySales = 0;
-    let todayPayments = 0;
-
-    customers.forEach((customer) => {
-      customer.transactions?.forEach((transaction) => {
-        if (transaction.date && new Date(transaction.date) >= today) {
-          if (transaction.transactionType === "debit") {
-            todaySales += transaction.amount || 0;
-          } else if (transaction.transactionType === "payment") {
-            todayPayments += transaction.amount || 0;
-          }
+    let todaySales = 0,
+      todayPayments = 0;
+    customers.forEach((c) => {
+      c.transactions?.forEach((t) => {
+        if (t.date && new Date(t.date) >= today) {
+          if (t.transactionType === "debit") todaySales += t.amount || 0;
+          if (t.transactionType === "payment") todayPayments += t.amount || 0;
         }
       });
     });
@@ -261,21 +323,22 @@ router.get("/summary", async (req, res) => {
       success: true,
       summary: {
         totalCustomers: customers.length,
-        totalAmount: totalAmount,
-        totalPaid: totalPaid,
-        totalDue: totalDue,
-        totalTransactions: customers.reduce((sum, c) => sum + (c.transactions?.length || 0), 0),
-        todaySales: todaySales,
-        todayPayments: todayPayments,
+        totalAmount,
+        totalPaid,
+        totalDue,
+        totalTransactions: customers.reduce(
+          (s, c) => s + (c.transactions?.length || 0),
+          0,
+        ),
+        todaySales,
+        todayPayments,
         netToday: todaySales - todayPayments,
       },
     });
   } catch (error) {
-    console.error("Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server Error: " + error.message,
-    });
+    res
+      .status(500)
+      .json({ success: false, message: "Server Error: " + error.message });
   }
 });
 
