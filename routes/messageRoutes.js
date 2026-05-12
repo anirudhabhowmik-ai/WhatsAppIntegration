@@ -34,6 +34,7 @@ router.post("/", async (req, res) => {
       quantity,
       itemName,
       amount,
+      paid,
     });
 
     if (amount === 0) {
@@ -95,8 +96,8 @@ router.post("/", async (req, res) => {
     await customer.save();
 
     const replyMessage = isNewCustomer
-      ? `✅ NEW CUSTOMER CREATED!\n\n👤 Name: ${customerName}\n📝 Purchase: ${quantity} ${itemName}\n💰 Amount: ₹${amount}\n📊 Total Due: ₹${customer.totalDue}`
-      : `✅ ACCOUNT UPDATED!\n\n👤 Customer: ${customerName}\n📝 Purchase: ${quantity} ${itemName}\n💰 Amount: ₹${amount}\n📊 New Total Due: ₹${customer.totalDue}`;
+      ? `✅ NEW CUSTOMER CREATED!\n\n👤 Name: ${customerName}\n📝 Purchase: ${quantity} ${itemName}\n💰 Amount: ₹${amount}\n💰 Paid: ₹${paid || 0}\n📊 Total Due: ₹${customer.totalDue}`
+      : `✅ ACCOUNT UPDATED!\n\n👤 Customer: ${customerName}\n📝 Purchase: ${quantity} ${itemName}\n💰 Amount: ₹${amount}\n💰 Paid: ₹${paid || 0}\n📊 New Total Due: ₹${customer.totalDue}`;
 
     res.status(201).json({
       success: true,
@@ -136,9 +137,12 @@ router.post("/", async (req, res) => {
 router.get("/customers", async (req, res) => {
   try {
     const customers = await Customer.find().sort({ createdAt: -1 });
-    const totalDue = customers.reduce((sum, c) => sum + c.totalDue, 0);
-    const totalAmount = customers.reduce((sum, c) => sum + c.totalAmount, 0);
-    const totalPaid = customers.reduce((sum, c) => sum + c.totalPaid, 0);
+    const totalDue = customers.reduce((sum, c) => sum + (c.totalDue || 0), 0);
+    const totalAmount = customers.reduce(
+      (sum, c) => sum + (c.totalAmount || 0),
+      0,
+    );
+    const totalPaid = customers.reduce((sum, c) => sum + (c.totalPaid || 0), 0);
 
     res.json({
       success: true,
@@ -150,10 +154,10 @@ router.get("/customers", async (req, res) => {
         id: c._id,
         name: c.name,
         phone: c.phone,
-        totalAmount: c.totalAmount,
-        totalPaid: c.totalPaid,
-        totalDue: c.totalDue,
-        transactionsCount: c.transactions.length,
+        totalAmount: c.totalAmount || 0,
+        totalPaid: c.totalPaid || 0,
+        totalDue: c.totalDue || 0,
+        transactionsCount: c.transactions?.length || 0,
         createdAt: c.createdAt,
       })),
     });
@@ -184,14 +188,18 @@ router.get("/customers/:id", async (req, res) => {
         id: customer._id,
         name: customer.name,
         phone: customer.phone,
-        totalAmount: customer.totalAmount,
-        totalPaid: customer.totalPaid,
-        totalDue: customer.totalDue,
+        totalAmount: customer.totalAmount || 0,
+        totalPaid: customer.totalPaid || 0,
+        totalDue: customer.totalDue || 0,
         createdAt: customer.createdAt,
         updatedAt: customer.updatedAt,
       },
-      transactions: customer.transactions.sort((a, b) => b.date - a.date),
-      totalTransactions: customer.transactions.length,
+      transactions: customer.transactions
+        ? [...customer.transactions].sort(
+            (a, b) => new Date(b.date) - new Date(a.date),
+          )
+        : [],
+      totalTransactions: customer.transactions?.length || 0,
     });
   } catch (error) {
     console.error("Error:", error);
@@ -214,6 +222,14 @@ router.post("/payment", async (req, res) => {
       });
     }
 
+    const paymentAmount = parseInt(amount);
+    if (isNaN(paymentAmount)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid amount",
+      });
+    }
+
     const customer = await Customer.findOne({
       name: { $regex: new RegExp(`^${customerName}$`, "i") },
     });
@@ -225,32 +241,34 @@ router.post("/payment", async (req, res) => {
       });
     }
 
+    const previousDue = customer.totalDue || 0;
+
     // Add payment transaction
     customer.transactions.push({
       itemName: "Payment Received",
-      amount: amount,
-      paid: amount,
+      amount: paymentAmount,
+      paid: paymentAmount,
       transactionType: "payment",
-      originalMessage: `Payment of ₹${amount} from ${customerName}. ${note || ""}`,
+      originalMessage: `Payment of ₹${paymentAmount} from ${customerName}. ${note || ""}`,
       date: new Date(),
     });
 
     // Update totals
-    customer.totalPaid += amount;
-    customer.totalDue = customer.totalAmount - customer.totalPaid;
+    customer.totalPaid = (customer.totalPaid || 0) + paymentAmount;
+    customer.totalDue = (customer.totalAmount || 0) - (customer.totalPaid || 0);
 
     await customer.save();
 
     res.json({
       success: true,
-      message: `✅ Payment received from ${customerName}\n💰 Amount: ₹${amount}\n📊 Previous Due: ₹${customer.totalDue + amount}\n📊 New Due: ₹${customer.totalDue}`,
+      message: `✅ Payment received from ${customerName}\n💰 Amount: ₹${paymentAmount}\n📊 Previous Due: ₹${previousDue}\n📊 New Due: ₹${customer.totalDue}`,
       data: {
         customer: {
           id: customer._id,
           name: customer.name,
-          totalAmount: customer.totalAmount,
-          totalPaid: customer.totalPaid,
-          totalDue: customer.totalDue,
+          totalAmount: customer.totalAmount || 0,
+          totalPaid: customer.totalPaid || 0,
+          totalDue: customer.totalDue || 0,
         },
         lastPayment: customer.transactions[customer.transactions.length - 1],
       },
@@ -269,9 +287,12 @@ router.get("/summary", async (req, res) => {
   try {
     const customers = await Customer.find();
 
-    const totalAmount = customers.reduce((sum, c) => sum + c.totalAmount, 0);
-    const totalPaid = customers.reduce((sum, c) => sum + c.totalPaid, 0);
-    const totalDue = customers.reduce((sum, c) => sum + c.totalDue, 0);
+    const totalAmount = customers.reduce(
+      (sum, c) => sum + (c.totalAmount || 0),
+      0,
+    );
+    const totalPaid = customers.reduce((sum, c) => sum + (c.totalPaid || 0), 0);
+    const totalDue = customers.reduce((sum, c) => sum + (c.totalDue || 0), 0);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -281,28 +302,30 @@ router.get("/summary", async (req, res) => {
     let todayPayments = 0;
 
     customers.forEach((customer) => {
-      customer.transactions.forEach((transaction) => {
-        if (new Date(transaction.date) >= today) {
-          if (transaction.transactionType === "debit") {
-            todaySales += transaction.amount;
-          } else if (transaction.transactionType === "payment") {
-            todayPayments += transaction.amount;
+      if (customer.transactions) {
+        customer.transactions.forEach((transaction) => {
+          if (transaction.date && new Date(transaction.date) >= today) {
+            if (transaction.transactionType === "debit") {
+              todaySales += transaction.amount || 0;
+            } else if (transaction.transactionType === "payment") {
+              todayPayments += transaction.amount || 0;
+            }
           }
-        }
-      });
+        });
+      }
     });
 
     // Get top 5 customers by due
     const topCustomers = [...customers]
-      .sort((a, b) => b.totalDue - a.totalDue)
+      .sort((a, b) => (b.totalDue || 0) - (a.totalDue || 0))
       .slice(0, 5)
       .map((c) => ({
         id: c._id,
         name: c.name,
         phone: c.phone,
-        totalDue: c.totalDue,
-        totalAmount: c.totalAmount,
-        totalPaid: c.totalPaid,
+        totalDue: c.totalDue || 0,
+        totalAmount: c.totalAmount || 0,
+        totalPaid: c.totalPaid || 0,
       }));
 
     res.json({
@@ -313,7 +336,7 @@ router.get("/summary", async (req, res) => {
         totalPaid: totalPaid,
         totalDue: totalDue,
         totalTransactions: customers.reduce(
-          (sum, c) => sum + c.transactions.length,
+          (sum, c) => sum + (c.transactions?.length || 0),
           0,
         ),
         todaySales: todaySales,
@@ -359,13 +382,17 @@ router.delete(
 
       // Reverse the transaction effects
       if (transaction.transactionType === "debit") {
-        customer.totalAmount -= transaction.amount;
-        customer.totalPaid -= transaction.paid || 0;
+        customer.totalAmount =
+          (customer.totalAmount || 0) - (transaction.amount || 0);
+        customer.totalPaid =
+          (customer.totalPaid || 0) - (transaction.paid || 0);
       } else if (transaction.transactionType === "payment") {
-        customer.totalPaid -= transaction.amount;
+        customer.totalPaid =
+          (customer.totalPaid || 0) - (transaction.amount || 0);
       }
 
-      customer.totalDue = customer.totalAmount - customer.totalPaid;
+      customer.totalDue =
+        (customer.totalAmount || 0) - (customer.totalPaid || 0);
 
       // Remove the transaction
       customer.transactions.splice(index, 1);

@@ -71,9 +71,12 @@ const customerSchema = new mongoose.Schema(
   }
 );
 
-// Pre-save middleware to calculate totalDue
+// Pre-save middleware to calculate totalDue (only if not set manually)
 customerSchema.pre('save', function(next) {
-  this.totalDue = this.totalAmount - this.totalPaid;
+  // Only recalculate if totalDue is not explicitly set
+  if (this.isModified('totalAmount') || this.isModified('totalPaid')) {
+    this.totalDue = this.totalAmount - this.totalPaid;
+  }
   next();
 });
 
