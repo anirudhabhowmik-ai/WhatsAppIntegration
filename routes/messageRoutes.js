@@ -4,7 +4,7 @@ import parseMessage from "../services/parserService.js";
 
 const router = express.Router();
 
-// Create transaction - Store directly in customer
+// Create transaction - Store directly in customer (NO separate Transaction model)
 router.post("/", async (req, res) => {
   try {
     const { message } = req.body;
@@ -53,7 +53,7 @@ router.post("/", async (req, res) => {
     let isNewCustomer = false;
 
     if (!customer) {
-      // Create new customer with first transaction
+      // Create new customer with first transaction embedded
       customer = new Customer({
         name: customerName,
         phone: phone || "",
@@ -75,7 +75,7 @@ router.post("/", async (req, res) => {
       });
       isNewCustomer = true;
     } else {
-      // Add transaction to existing customer
+      // Add transaction to existing customer's embedded transactions array
       customer.transactions.push({
         itemName: itemName,
         itemDescription: itemDescription || "",
@@ -104,15 +104,6 @@ router.post("/", async (req, res) => {
       message: replyMessage,
       data: {
         isNewCustomer,
-        parsedData: {
-          customerName,
-          phone,
-          itemName,
-          itemDescription,
-          quantity,
-          amount,
-          paid,
-        },
         customer: {
           id: customer._id,
           name: customer.name,
@@ -210,7 +201,7 @@ router.get("/customers/:id", async (req, res) => {
   }
 });
 
-// Record payment (add payment transaction to customer)
+// Record payment
 router.post("/payment", async (req, res) => {
   try {
     const { customerName, amount, note } = req.body;
@@ -243,7 +234,7 @@ router.post("/payment", async (req, res) => {
 
     const previousDue = customer.totalDue || 0;
 
-    // Add payment transaction
+    // Add payment transaction to embedded transactions array
     customer.transactions.push({
       itemName: "Payment Received",
       amount: paymentAmount,
@@ -270,7 +261,6 @@ router.post("/payment", async (req, res) => {
           totalPaid: customer.totalPaid || 0,
           totalDue: customer.totalDue || 0,
         },
-        lastPayment: customer.transactions[customer.transactions.length - 1],
       },
     });
   } catch (error) {
@@ -297,7 +287,6 @@ router.get("/summary", async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // Calculate today's sales and payments from transactions
     let todaySales = 0;
     let todayPayments = 0;
 
@@ -315,7 +304,6 @@ router.get("/summary", async (req, res) => {
       }
     });
 
-    // Get top 5 customers by due
     const topCustomers = [...customers]
       .sort((a, b) => (b.totalDue || 0) - (a.totalDue || 0))
       .slice(0, 5)
@@ -353,64 +341,5 @@ router.get("/summary", async (req, res) => {
     });
   }
 });
-
-// Delete transaction (undo) - remove from customer's transactions array
-router.delete(
-  "/transaction/:customerId/:transactionIndex",
-  async (req, res) => {
-    try {
-      const { customerId, transactionIndex } = req.params;
-
-      const customer = await Customer.findById(customerId);
-
-      if (!customer) {
-        return res.status(404).json({
-          success: false,
-          message: "Customer not found",
-        });
-      }
-
-      const index = parseInt(transactionIndex);
-      if (index < 0 || index >= customer.transactions.length) {
-        return res.status(404).json({
-          success: false,
-          message: "Transaction not found",
-        });
-      }
-
-      const transaction = customer.transactions[index];
-
-      // Reverse the transaction effects
-      if (transaction.transactionType === "debit") {
-        customer.totalAmount =
-          (customer.totalAmount || 0) - (transaction.amount || 0);
-        customer.totalPaid =
-          (customer.totalPaid || 0) - (transaction.paid || 0);
-      } else if (transaction.transactionType === "payment") {
-        customer.totalPaid =
-          (customer.totalPaid || 0) - (transaction.amount || 0);
-      }
-
-      customer.totalDue =
-        (customer.totalAmount || 0) - (customer.totalPaid || 0);
-
-      // Remove the transaction
-      customer.transactions.splice(index, 1);
-
-      await customer.save();
-
-      res.json({
-        success: true,
-        message: "Transaction deleted successfully",
-      });
-    } catch (error) {
-      console.error("Error:", error);
-      res.status(500).json({
-        success: false,
-        message: "Server Error: " + error.message,
-      });
-    }
-  },
-);
 
 export default router;
