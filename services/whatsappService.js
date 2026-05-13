@@ -60,15 +60,15 @@ export async function handleIncomingMessage(req, res) {
 
       const contact = value.contacts?.[0];
       const customerNumber = message.from;
-      const customerName = contact?.profile?.name || "Customer";
+      const whatsappProfileName = contact?.profile?.name || "Customer";
       const messageText = message.text.body;
 
       console.log(`✅ TEXT MESSAGE FOUND!`);
-      console.log(`📱 Customer: ${customerName} (${customerNumber})`);
+      console.log(`📱 Customer WhatsApp: ${whatsappProfileName} (${customerNumber})`);
       console.log(`💬 Message: "${messageText}"`);
 
-      // ✅ FIXED: Process message directly (no HTTP self-loop)
-      await processMessage(customerNumber, customerName, messageText);
+      // Process the message
+      await processMessage(customerNumber, whatsappProfileName, messageText);
 
     } else if (value.statuses) {
       console.log(`ℹ️ Status update: ${value.statuses[0]?.status}`);
@@ -76,20 +76,18 @@ export async function handleIncomingMessage(req, res) {
       console.log("ℹ️ Other webhook type:", Object.keys(value));
     }
   } catch (error) {
-    // ✅ FIXED: Errors are now properly caught and logged
     console.error("❌ Webhook processing error:", error.message);
     console.error(error.stack);
   }
 }
 
-// ✅ FIXED: Directly handles logic instead of calling own server over HTTP
-async function processMessage(phoneNumber, customerName, message) {
+async function processMessage(phoneNumber, whatsappProfileName, message) {
   try {
     console.log("=".repeat(60));
     console.log("📝 PROCESSING MESSAGE DIRECTLY");
     console.log("Message:", message);
     console.log("Customer Phone:", phoneNumber);
-    console.log("Customer Name:", customerName);
+    console.log("WhatsApp Profile Name:", whatsappProfileName);
     console.log("=".repeat(60));
 
     const shopkeeperId = "default";
@@ -192,8 +190,13 @@ async function processMessage(phoneNumber, customerName, message) {
       if (!amount || amount === 0) {
         replyMessage = "❌ Could not understand. Try: *Ravi 2 milk 40 rs*";
       } else {
-        const nameToUse = customerName !== "Customer" ? customerName : parsedName;
-
+        // ✅ FIXED: Use the parsed customer name from the message, NOT the WhatsApp profile name
+        // The parsedName is what AI extracted from "Ravi 2 milk 40" -> "Ravi"
+        // This is the correct customer name to use
+        const nameToUse = parsedName;
+        
+        console.log(`🔍 Parsed customer name from message: "${parsedName}"`);
+        console.log(`🔍 WhatsApp profile name (ignored for customer record): "${whatsappProfileName}"`);
         console.log(`🔍 Looking for customer: ${nameToUse}`);
 
         let customer = await Customer.findOne({
@@ -223,7 +226,7 @@ async function processMessage(phoneNumber, customerName, message) {
             }],
           });
         } else {
-          console.log(`📝 Adding transaction to: ${nameToUse}`);
+          console.log(`📝 Adding transaction to existing customer: ${nameToUse}`);
           if (phoneNumber && !customer.phone) customer.phone = phoneNumber;
 
           customer.transactions.push({
@@ -237,6 +240,7 @@ async function processMessage(phoneNumber, customerName, message) {
           });
           customer.totalAmount += amount;
           customer.totalPaid   += paid || 0;
+          customer.totalDue = customer.totalAmount - customer.totalPaid;
         }
 
         console.log("💾 Saving customer...");
@@ -254,7 +258,6 @@ async function processMessage(phoneNumber, customerName, message) {
     await sendWhatsAppMessage(phoneNumber, replyMessage);
 
   } catch (error) {
-    // ✅ FIXED: Errors are caught and customer still gets a reply
     console.error("❌ Error processing message:", error.message);
     console.error(error.stack);
     try {
@@ -286,7 +289,7 @@ async function sendWhatsAppMessage(to, message) {
           Authorization: `Bearer ${WHATSAPP_TOKEN}`,
           "Content-Type": "application/json",
         },
-        timeout: 10000, // ✅ ADDED: 10s timeout so it doesn't hang forever
+        timeout: 10000,
       }
     );
 
