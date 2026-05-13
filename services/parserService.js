@@ -102,7 +102,7 @@ const parseMessage = async (message) => {
   // Normal transaction — parse with Gemini
   try {
     console.log("🤖 Parsing with Gemini:", message);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
     const prompt = `
 You are a shopkeeper assistant. Parse the message and return ONLY valid JSON, no extra text.
