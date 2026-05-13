@@ -5,6 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import connectDB from "./config/db.js";
 import messageRoutes from "./routes/messageRoutes.js";
+import webhookRoutes from "./routes/webhookRoutes.js";
 
 dotenv.config();
 
@@ -28,6 +29,12 @@ app.get("/", (req, res) => {
 });
 
 app.use("/message", messageRoutes);
+app.use("/whatsapp", webhookRoutes);  // New WhatsApp webhook route
+
+// Health check endpoint
+app.get("/health", (req, res) => {
+  res.json({ status: "✅ Server is running!", timestamp: new Date().toISOString() });
+});
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -45,4 +52,8 @@ app.use((err, req, res, next) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📞 WhatsApp webhook URL: http://localhost:${PORT}/whatsapp/webhook`);
+  console.log(`✅ Health check: http://localhost:${PORT}/health`);
+});

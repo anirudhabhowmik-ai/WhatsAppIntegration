@@ -10,7 +10,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 async function understandIntent(message) {
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    
+
     const prompt = `
       You are a multilingual shopkeeper assistant. Analyze the user's message in ANY language and classify the intent.
       
@@ -102,18 +102,21 @@ async function understandIntent(message) {
       
       Return ONLY valid JSON, no explanation.
     `;
-    
+
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = response.text();
-    
-    let cleanedText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+    let cleanedText = text
+      .replace(/```json\n?/g, "")
+      .replace(/```\n?/g, "")
+      .trim();
     const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
     if (jsonMatch) cleanedText = jsonMatch[0];
-    
+
     const intent = JSON.parse(cleanedText);
-    console.log(`🤖 Intent (${intent.language || 'auto'}):`, intent);
-    
+    console.log(`🤖 Intent (${intent.language || "auto"}):`, intent);
+
     return intent;
   } catch (error) {
     console.error("Intent recognition error:", error.message);
@@ -124,16 +127,21 @@ async function understandIntent(message) {
 // ── MAIN ENDPOINT ── Handles EVERYTHING with AI ──────────────────────────────
 router.post("/", async (req, res) => {
   try {
-    const { message } = req.body;
+    const { message, customerPhone, customerName: providedName } = req.body;
     if (!message) {
-      return res.status(400).json({ success: false, message: "Message is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Message is required" });
     }
 
     // Use AI to understand intent in ANY language
     const intent = await understandIntent(message);
-    
+
+    // Use provided name (from WhatsApp) or extracted name
+    const effectiveCustomerName = providedName || intent.customerName;
+
     // ── HELP ──────────────────────────────────────────────────────────────────
-    if (intent.intent === 'help') {
+    if (intent.intent === "help") {
       return res.json({
         success: true,
         message: `📖 *COMMANDS (Any Language)*
@@ -170,17 +178,20 @@ router.post("/", async (req, res) => {
    summary
 
 ❓ *Help:*
-   help`
+   help`,
       });
     }
 
     // ── SUMMARY ───────────────────────────────────────────────────────────────
-    if (intent.intent === 'summary') {
+    if (intent.intent === "summary") {
       const customers = await Customer.find();
-      const totalAmount = customers.reduce((s, c) => s + (c.totalAmount || 0), 0);
+      const totalAmount = customers.reduce(
+        (s, c) => s + (c.totalAmount || 0),
+        0,
+      );
       const totalPaid = customers.reduce((s, c) => s + (c.totalPaid || 0), 0);
       const totalDue = customers.reduce((s, c) => s + (c.totalDue || 0), 0);
-      
+
       return res.json({
         success: true,
         message: `📊 *SHOP SUMMARY*
@@ -188,102 +199,190 @@ router.post("/", async (req, res) => {
 👥 Customers: ${customers.length}
 🛒 Total Sales: ₹${totalAmount}
 ✅ Collected: ₹${totalPaid}
-🔴 Total Due: ₹${totalDue}`
+🔴 Total Due: ₹${totalDue}`,
       });
     }
 
     // ── LIST CUSTOMERS ────────────────────────────────────────────────────────
-    if (intent.intent === 'list_customers') {
+    if (intent.intent === "list_customers") {
       const customers = await Customer.find().sort({ createdAt: -1 });
       if (!customers.length) {
-        return res.json({ success: true, message: "📭 No customers yet. Add: *Ravi 2 milk 40 rs*" });
+        return res.json({
+          success: true,
+          message: "📭 No customers yet. Add: *Ravi 2 milk 40 rs*",
+        });
       }
-      const lines = customers.map((c, i) => `${i + 1}. *${c.name}* — ₹${c.totalDue}`);
+      const lines = customers.map(
+        (c, i) => `${i + 1}. *${c.name}* — ₹${c.totalDue}`,
+      );
       const totalDue = customers.reduce((s, c) => s + c.totalDue, 0);
-      return res.json({ success: true, message: `👥 *CUSTOMERS* (${customers.length})\n${lines.join("\n")}\n📊 Total Due: ₹${totalDue}` });
+      return res.json({
+        success: true,
+        message: `👥 *CUSTOMERS* (${customers.length})\n${lines.join("\n")}\n📊 Total Due: ₹${totalDue}`,
+      });
     }
 
     // ── DELETE CUSTOMER (Any language) ────────────────────────────────────────
-    if (intent.intent === 'delete_customer') {
-      const customerName = intent.customerName;
+    if (intent.intent === "delete_customer") {
+      const customerName = effectiveCustomerName;
       if (!customerName) {
-        return res.json({ success: false, message: "❌ Please specify customer name to delete." });
+        return res.json({
+          success: false,
+          message: "❌ Please specify customer name to delete.",
+        });
       }
-      
-      const customer = await Customer.findOne({ name: new RegExp(`^${customerName}$`, "i") });
+
+      const customer = await Customer.findOne({
+        name: new RegExp(`^${customerName}$`, "i"),
+      });
       if (!customer) {
-        return res.json({ success: false, message: `❌ Customer "${customerName}" not found.` });
+        return res.json({
+          success: false,
+          message: `❌ Customer "${customerName}" not found.`,
+        });
       }
-      
+
       await Customer.findByIdAndDelete(customer._id);
-      return res.json({ success: true, message: `🗑️ Deleted: *${customer.name}*` });
+      return res.json({
+        success: true,
+        message: `🗑️ Deleted: *${customer.name}*`,
+      });
     }
 
     // ── CHECK DUE (Any language) ──────────────────────────────────────────────
-    if (intent.intent === 'check_due') {
-      const customerName = intent.customerName;
+    if (intent.intent === "check_due") {
+      const customerName = effectiveCustomerName;
       if (!customerName) {
-        return res.json({ success: false, message: "❌ Please specify customer name." });
+        return res.json({
+          success: false,
+          message: "❌ Please specify customer name.",
+        });
       }
-      
-      const customer = await Customer.findOne({ name: new RegExp(`^${customerName}$`, "i") });
+
+      const customer = await Customer.findOne({
+        name: new RegExp(`^${customerName}$`, "i"),
+      });
       if (!customer) {
-        return res.json({ success: false, message: `❌ Customer "${customerName}" not found.` });
+        return res.json({
+          success: false,
+          message: `❌ Customer "${customerName}" not found.`,
+        });
       }
-      
-      return res.json({ success: true, message: customer.totalDue === 0 
-        ? `✅ *${customer.name}* has no pending dues!` 
-        : `💰 *${customer.name}* owes ₹${customer.totalDue}` });
+
+      // Update phone if provided
+      if (customerPhone && !customer.phone) {
+        customer.phone = customerPhone;
+        await customer.save();
+      }
+
+      return res.json({
+        success: true,
+        message:
+          customer.totalDue === 0
+            ? `✅ *${customer.name}* has no pending dues!`
+            : `💰 *${customer.name}* owes ₹${customer.totalDue}`,
+      });
     }
 
     // ── CUSTOMER DETAILS (Any language) ───────────────────────────────────────
-    if (intent.intent === 'customer_details') {
-      const customerName = intent.customerName;
+    if (intent.intent === "customer_details") {
+      const customerName = effectiveCustomerName;
       if (!customerName) {
-        return res.json({ success: false, message: "❌ Please specify customer name." });
+        return res.json({
+          success: false,
+          message: "❌ Please specify customer name.",
+        });
       }
-      
-      const customer = await Customer.findOne({ name: new RegExp(`^${customerName}$`, "i") });
+
+      const customer = await Customer.findOne({
+        name: new RegExp(`^${customerName}$`, "i"),
+      });
       if (!customer) {
-        return res.json({ success: false, message: `❌ Customer "${customerName}" not found.` });
+        return res.json({
+          success: false,
+          message: `❌ Customer "${customerName}" not found.`,
+        });
       }
-      
-      return res.json({ success: true, message: `👤 *${customer.name}*\n📱 Phone: ${customer.phone || "N/A"}\n💰 Total: ₹${customer.totalAmount}\n✅ Paid: ₹${customer.totalPaid}\n🔴 Due: ₹${customer.totalDue}\n📝 Transactions: ${customer.transactions?.length || 0}` });
+
+      // Update phone if provided
+      if (customerPhone && !customer.phone) {
+        customer.phone = customerPhone;
+        await customer.save();
+      }
+
+      return res.json({
+        success: true,
+        message: `👤 *${customer.name}*\n📱 Phone: ${customer.phone || "N/A"}\n💰 Total: ₹${customer.totalAmount}\n✅ Paid: ₹${customer.totalPaid}\n🔴 Due: ₹${customer.totalDue}\n📝 Transactions: ${customer.transactions?.length || 0}`,
+      });
     }
 
     // ── TRANSACTION HISTORY (Any language) ────────────────────────────────────
-    if (intent.intent === 'transaction_history') {
-      const customerName = intent.customerName;
+    if (intent.intent === "transaction_history") {
+      const customerName = effectiveCustomerName;
       if (!customerName) {
-        return res.json({ success: false, message: "❌ Please specify customer name." });
+        return res.json({
+          success: false,
+          message: "❌ Please specify customer name.",
+        });
       }
-      
-      const customer = await Customer.findOne({ name: new RegExp(`^${customerName}$`, "i") });
+
+      const customer = await Customer.findOne({
+        name: new RegExp(`^${customerName}$`, "i"),
+      });
       if (!customer) {
-        return res.json({ success: false, message: `❌ Customer "${customerName}" not found.` });
+        return res.json({
+          success: false,
+          message: `❌ Customer "${customerName}" not found.`,
+        });
       }
-      
-      const transactions = customer.transactions?.slice(-5).reverse().map(t => 
-        `• ${t.quantity} ${t.itemName} — ₹${t.amount}`
-      ).join("\n") || "No transactions yet";
-      
-      return res.json({ success: true, message: `📜 *${customer.name}'s Transactions*\n${transactions}` });
+
+      // Update phone if provided
+      if (customerPhone && !customer.phone) {
+        customer.phone = customerPhone;
+        await customer.save();
+      }
+
+      const transactions =
+        customer.transactions
+          ?.slice(-5)
+          .reverse()
+          .map((t) => `• ${t.quantity} ${t.itemName} — ₹${t.amount}`)
+          .join("\n") || "No transactions yet";
+
+      return res.json({
+        success: true,
+        message: `📜 *${customer.name}'s Transactions*\n${transactions}`,
+      });
     }
 
     // ── PAYMENT (Any language) ────────────────────────────────────────────────
-    if (intent.intent === 'payment') {
-      const customerName = intent.customerName;
+    if (intent.intent === "payment") {
+      const customerName = effectiveCustomerName;
       const amount = intent.amount;
-      
+
       if (!customerName || !amount) {
-        return res.json({ success: false, message: "❌ Please specify customer name and amount. Example: 'pay Ravi 20'" });
+        return res.json({
+          success: false,
+          message:
+            "❌ Please specify customer name and amount. Example: 'pay Ravi 20'",
+        });
       }
-      
-      const customer = await Customer.findOne({ name: new RegExp(`^${customerName}$`, "i") });
+
+      let customer = await Customer.findOne({
+        name: new RegExp(`^${customerName}$`, "i"),
+      });
       if (!customer) {
-        return res.json({ success: false, message: `❌ Customer "${customerName}" not found.` });
+        return res.json({
+          success: false,
+          message: `❌ Customer "${customerName}" not found.`,
+        });
       }
-      
+
+      // Update phone if provided
+      if (customerPhone && !customer.phone) {
+        customer.phone = customerPhone;
+      }
+
       const prevDue = customer.totalDue;
       customer.transactions.push({
         itemName: "Payment Received",
@@ -296,38 +395,55 @@ router.post("/", async (req, res) => {
       customer.totalPaid += amount;
       customer.totalAmount += amount;
       await customer.save();
-      
-      return res.json({ success: true, message: `✅ *PAYMENT RECEIVED!*\n👤 ${customer.name}\n💵 Amount: ₹${amount}\n📊 Previous Due: ₹${prevDue}\n📊 New Due: ₹${customer.totalDue}` });
+
+      return res.json({
+        success: true,
+        message: `✅ *PAYMENT RECEIVED!*\n👤 ${customer.name}\n💵 Amount: ₹${amount}\n📊 Previous Due: ₹${prevDue}\n📊 New Due: ₹${customer.totalDue}`,
+      });
     }
 
     // ── DEFAULT: Add Transaction (using existing parseMessage with AI) ─────────
     const parsed = await parseMessage(message);
-    const { customerName, itemName, quantity, amount, paid, originalMessage } = parsed;
+    const { customerName, itemName, quantity, amount, paid, originalMessage } =
+      parsed;
 
     if (!amount || amount === 0) {
-      return res.json({ success: false, message: "❌ Could not understand. Try: *Ravi 2 milk 40 rs*" });
+      return res.json({
+        success: false,
+        message: "❌ Could not understand. Try: *Ravi 2 milk 40 rs*",
+      });
     }
 
-    let customer = await Customer.findOne({ name: new RegExp(`^${customerName}$`, "i") });
+    let customer = await Customer.findOne({
+      name: new RegExp(`^${customerName}$`, "i"),
+    });
     const isNew = !customer;
 
     if (isNew) {
       customer = new Customer({
         name: customerName,
+        phone: customerPhone || null, // Save WhatsApp number
         totalAmount: amount,
         totalPaid: paid || 0,
         totalDue: amount - (paid || 0),
-        transactions: [{
-          itemName,
-          quantity,
-          amount,
-          paid: paid || 0,
-          transactionType: "debit",
-          originalMessage,
-          date: new Date(),
-        }],
+        transactions: [
+          {
+            itemName,
+            quantity,
+            amount,
+            paid: paid || 0,
+            transactionType: "debit",
+            originalMessage,
+            date: new Date(),
+          },
+        ],
       });
     } else {
+      // Update phone if provided and not already set
+      if (customerPhone && !customer.phone) {
+        customer.phone = customerPhone;
+      }
+
       customer.transactions.push({
         itemName,
         quantity,
@@ -343,13 +459,17 @@ router.post("/", async (req, res) => {
     }
     await customer.save();
 
-    return res.json({ success: true, message: isNew 
-      ? `🆕 *NEW CUSTOMER!*\n👤 ${customerName}\n🛒 ${quantity} ${itemName} — ₹${amount}\n📊 Due: ₹${customer.totalDue}`
-      : `✅ *ADDED!*\n🛒 ${quantity} ${itemName} — ₹${amount}\n📊 ${customerName} Due: ₹${customer.totalDue}` });
-    
+    return res.json({
+      success: true,
+      message: isNew
+        ? `🆕 *NEW CUSTOMER!*\n👤 ${customerName}\n📱 Phone: ${customer.phone || "N/A"}\n🛒 ${quantity} ${itemName} — ₹${amount}\n📊 Due: ₹${customer.totalDue}`
+        : `✅ *ADDED!*\n🛒 ${quantity} ${itemName} — ₹${amount}\n📊 ${customerName} Due: ₹${customer.totalDue}`,
+    });
   } catch (error) {
     console.error("Error:", error);
-    res.status(500).json({ success: false, message: "Server Error: " + error.message });
+    res
+      .status(500)
+      .json({ success: false, message: "Server Error: " + error.message });
   }
 });
 
