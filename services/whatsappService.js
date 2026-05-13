@@ -33,9 +33,10 @@ export async function handleIncomingMessage(req, res) {
     console.log("=".repeat(60));
     console.log("📨 WEBHOOK RECEIVED");
     console.log("Time:", new Date().toISOString());
-    console.log("Full body keys:", Object.keys(req.body));
     
     const body = req.body;
+    console.log("Full body received");
+
     const entry = body.entry?.[0];
     if (!entry) {
       console.log("No entry in webhook");
@@ -49,11 +50,9 @@ export async function handleIncomingMessage(req, res) {
     }
 
     const value = changes.value;
-    console.log("Value keys:", Object.keys(value));
 
     if (value.messages && value.messages.length > 0) {
       const message = value.messages[0];
-      console.log("Message type:", message.type);
 
       if (message.type !== "text" || !message.text?.body) {
         console.log("⚠️ Skipping non-text message:", message.type);
@@ -69,11 +68,12 @@ export async function handleIncomingMessage(req, res) {
       console.log(`📱 Customer: ${whatsappProfileName} (${customerNumber})`);
       console.log(`💬 Message: "${messageText}"`);
 
-      await processMessage(customerNumber, whatsappProfileName, messageText);
+      // Process the message directly
+      await processDirectMessage(customerNumber, whatsappProfileName, messageText);
     } else if (value.statuses) {
       console.log(`ℹ️ Status update: ${value.statuses[0]?.status}`);
     } else {
-      console.log("Other webhook data:", Object.keys(value));
+      console.log("ℹ️ Other webhook type:", Object.keys(value));
     }
   } catch (error) {
     console.error("❌ Webhook processing error:", error.message);
@@ -81,167 +81,104 @@ export async function handleIncomingMessage(req, res) {
   }
 }
 
-async function processMessage(phoneNumber, whatsappProfileName, message) {
+// Direct processing without HTTP call
+async function processDirectMessage(phoneNumber, whatsappProfileName, message) {
   try {
     console.log("=".repeat(60));
     console.log("📝 PROCESSING MESSAGE DIRECTLY");
-    console.log("Phone:", phoneNumber);
-    console.log("Profile Name:", whatsappProfileName);
     console.log("Message:", message);
+    console.log("Phone:", phoneNumber);
     
-    // ✅ AUTO-CREATE OR GET SHOPKEEPER
-    const businessPhoneNumber = "15551644565"; // Your WhatsApp Business number
-    console.log(`Looking for shopkeeper with phone: ${businessPhoneNumber}`);
-    
+    // Get or create shopkeeper
+    const businessPhoneNumber = "15551644565";
     let shopkeeper = await Shopkeeper.findOne({ phoneNumber: businessPhoneNumber });
     
     if (!shopkeeper) {
-      console.log("🆕 No shopkeeper found. Creating one automatically...");
-      try {
-        shopkeeper = new Shopkeeper({
-          whatsappBusinessAccountId: WHATSAPP_BUSINESS_ACCOUNT_ID,
-          phoneNumber: businessPhoneNumber,
-          shopName: "My WhatsApp Store",
-          ownerName: whatsappProfileName || "Store Owner",
-          email: "store@example.com",
-          apiKey: crypto.randomBytes(32).toString("hex"),
-          isActive: true
-        });
-        await shopkeeper.save();
-        console.log(`✅ Shopkeeper created: ${shopkeeper.shopName} (ID: ${shopkeeper._id})`);
-      } catch (saveError) {
-        console.error("❌ Error creating shopkeeper:", saveError.message);
-        throw saveError;
-      }
-    } else {
-      console.log(`✅ Found existing shopkeeper: ${shopkeeper.shopName} (ID: ${shopkeeper._id})`);
+      console.log("🆕 Creating shopkeeper...");
+      shopkeeper = new Shopkeeper({
+        whatsappBusinessAccountId: WHATSAPP_BUSINESS_ACCOUNT_ID,
+        phoneNumber: businessPhoneNumber,
+        shopName: "My WhatsApp Store",
+        ownerName: whatsappProfileName || "Store Owner",
+        email: "store@example.com",
+        apiKey: crypto.randomBytes(32).toString("hex"),
+        isActive: true
+      });
+      await shopkeeper.save();
+      console.log(`✅ Shopkeeper created: ${shopkeeper._id}`);
     }
     
     const shopkeeperId = shopkeeper._id.toString();
-    console.log(`🏪 Using shopkeeper ID: ${shopkeeperId}`);
     
-    // Parse the message using AI
-    console.log("Calling parseMessage...");
+    // Parse message with AI
     const parsed = await parseMessage(message);
-    console.log("📊 Parsed result:", JSON.stringify(parsed, null, 2));
-
+    console.log("📊 Parsed:", JSON.stringify(parsed, null, 2));
+    
     let replyMessage = "";
-
-    // ── LIST CUSTOMERS ───────────────────────────────────────────────────
-    if (parsed.command === "list_customers" || parsed.intent === "list_customers") {
-      console.log("Processing LIST CUSTOMERS");
-      const customers = await Customer.find({ shopkeeperId }).sort({ createdAt: -1 });
-      if (!customers.length) {
-        replyMessage = "📭 No customers yet. Add: *Ravi 2 milk 40 rs*";
-      } else {
-        const lines = customers.map((c, i) => `${i + 1}. *${c.name}* — ₹${c.totalDue}`);
-        const totalDue = customers.reduce((s, c) => s + c.totalDue, 0);
-        replyMessage = `👥 *CUSTOMERS* (${customers.length})\n${lines.join("\n")}\n📊 Total Due: ₹${totalDue}`;
-      }
-    }
     
-    // ── SUMMARY ──────────────────────────────────────────────────────────
-    else if (parsed.command === "summary" || parsed.intent === "summary") {
-      console.log("Processing SUMMARY");
+    // Handle different intents
+    if (parsed.intent === "list_customers" || parsed.command === "list_customers") {
       const customers = await Customer.find({ shopkeeperId });
-      const totalAmount = customers.reduce((s, c) => s + (c.totalAmount || 0), 0);
-      const totalPaid = customers.reduce((s, c) => s + (c.totalPaid || 0), 0);
-      const totalDue = customers.reduce((s, c) => s + (c.totalDue || 0), 0);
-      replyMessage = `📊 *SHOP SUMMARY*\n━━━━━━━━━━━━━━━━━━━━\n👥 Customers: ${customers.length}\n🛒 Total Sales: ₹${totalAmount}\n✅ Collected: ₹${totalPaid}\n🔴 Total Due: ₹${totalDue}`;
-    }
-    
-    // ── HELP ─────────────────────────────────────────────────────────────
-    else if (parsed.command === "help" || parsed.intent === "help") {
-      console.log("Processing HELP");
-      replyMessage = `📖 *COMMANDS (Any Language)*\n━━━━━━━━━━━━━━━━━━━━\n🛒 Add: Ravi 2 milk 40\n💵 Pay: pay Ravi 20\n🔍 Due: Ravi pending\n📋 List: list\n📊 Summary: summary\n❓ Help: help`;
-    }
-    
-    // ── CHECK DUE ────────────────────────────────────────────────────────
-    else if (parsed.command === "check_due" || parsed.intent === "check_due") {
-      console.log("Processing CHECK DUE");
-      const name = parsed.customerName;
-      if (!name) {
-        replyMessage = "❌ Please specify customer name.";
+      if (customers.length === 0) {
+        replyMessage = "📭 No customers yet. Send: Ravi 2 milk 40";
       } else {
-        const customer = await Customer.findOne({
-          shopkeeperId,
-          name: new RegExp(`^${name}$`, "i"),
-        });
-        if (!customer) {
-          replyMessage = `❌ Customer "${name}" not found.`;
-        } else {
-          if (phoneNumber && !customer.phone) {
-            customer.phone = phoneNumber;
-            await customer.save();
-          }
-          replyMessage = customer.totalDue === 0
-            ? `✅ *${customer.name}* has no pending dues!`
-            : `💰 *${customer.name}* owes ₹${customer.totalDue}`;
-        }
+        const lines = customers.map((c, i) => `${i+1}. ${c.name} - ₹${c.totalDue}`);
+        replyMessage = `👥 CUSTOMERS:\n${lines.join("\n")}`;
+      }
+    } 
+    else if (parsed.intent === "summary" || parsed.command === "summary") {
+      const customers = await Customer.find({ shopkeeperId });
+      const totalDue = customers.reduce((s, c) => s + c.totalDue, 0);
+      replyMessage = `📊 SUMMARY\nCustomers: ${customers.length}\nTotal Due: ₹${totalDue}`;
+    }
+    else if (parsed.intent === "help" || parsed.command === "help") {
+      replyMessage = `📖 COMMANDS:\nAdd: Ravi 2 milk 40\nPay: pay Ravi 20\nDue: Ravi pending\nList: list\nSummary: summary`;
+    }
+    else if (parsed.intent === "check_due") {
+      const name = parsed.customerName;
+      const customer = await Customer.findOne({ shopkeeperId, name: new RegExp(`^${name}$`, "i") });
+      if (!customer) {
+        replyMessage = `❌ Customer "${name}" not found`;
+      } else {
+        replyMessage = customer.totalDue === 0 ? `✅ ${name} has no dues` : `💰 ${name} owes ₹${customer.totalDue}`;
       }
     }
-    
-    // ── PAYMENT ──────────────────────────────────────────────────────────
-    else if (parsed.command === "payment" || parsed.intent === "payment") {
-      console.log("Processing PAYMENT");
+    else if (parsed.intent === "payment") {
       const name = parsed.customerName;
       const amount = parsed.amount;
-
-      if (!name || !amount) {
-        replyMessage = "❌ Please specify customer name and amount. Example: 'pay Ravi 20'";
+      const customer = await Customer.findOne({ shopkeeperId, name: new RegExp(`^${name}$`, "i") });
+      if (!customer) {
+        replyMessage = `❌ Customer "${name}" not found`;
       } else {
-        const customer = await Customer.findOne({
-          shopkeeperId,
-          name: new RegExp(`^${name}$`, "i"),
+        customer.transactions.push({
+          itemName: "Payment Received",
+          amount: amount,
+          paid: amount,
+          transactionType: "payment",
+          originalMessage: message,
+          date: new Date()
         });
-        if (!customer) {
-          replyMessage = `❌ Customer "${name}" not found.`;
-        } else {
-          if (phoneNumber && !customer.phone) customer.phone = phoneNumber;
-
-          const prevDue = customer.totalDue;
-          customer.transactions.push({
-            itemName: "Payment Received",
-            amount: amount,
-            paid: amount,
-            transactionType: "payment",
-            originalMessage: message,
-            date: new Date(),
-          });
-          customer.totalPaid += amount;
-          customer.totalAmount += amount;
-          await customer.save();
-
-          replyMessage = `✅ *PAYMENT RECEIVED!*\n👤 ${customer.name}\n💵 Amount: ₹${amount}\n📊 Previous Due: ₹${prevDue}\n📊 New Due: ₹${customer.totalDue}`;
-        }
+        customer.totalPaid += amount;
+        customer.totalAmount += amount;
+        await customer.save();
+        replyMessage = `✅ Payment received! ${name} paid ₹${amount}\nNew Due: ₹${customer.totalDue}`;
       }
     }
-    
-    // ── ADD TRANSACTION (default) ────────────────────────────────────────
     else {
-      console.log("Processing ADD TRANSACTION");
-      const { customerName: parsedName, itemName, quantity, amount, paid, originalMessage } = parsed;
-
+      // Add transaction
+      const { customerName, itemName, quantity, amount, paid } = parsed;
+      
       if (!amount || amount === 0) {
-        replyMessage = "❌ Could not understand. Try: *Ravi 2 milk 40 rs*";
+        replyMessage = "❌ Could not understand. Try: Ravi 2 milk 40";
       } else {
-        const nameToUse = parsedName || "Customer";
-
-        console.log(`🔍 Looking for customer: ${nameToUse}`);
-
-        let customer = await Customer.findOne({
-          shopkeeperId,
-          name: new RegExp(`^${nameToUse}$`, "i"),
-        });
-
-        const isNew = !customer;
-
-        if (isNew) {
-          console.log(`🆕 Creating new customer: ${nameToUse}`);
+        const nameToUse = customerName || "Customer";
+        let customer = await Customer.findOne({ shopkeeperId, name: new RegExp(`^${nameToUse}$`, "i") });
+        
+        if (!customer) {
           customer = new Customer({
             shopkeeperId,
             name: nameToUse,
-            phone: phoneNumber || null,
+            phone: phoneNumber,
             totalAmount: amount,
             totalPaid: paid || 0,
             totalDue: amount - (paid || 0),
@@ -251,50 +188,41 @@ async function processMessage(phoneNumber, whatsappProfileName, message) {
               amount: amount,
               paid: paid || 0,
               transactionType: "debit",
-              originalMessage: originalMessage || message,
-              date: new Date(),
-            }],
+              originalMessage: message,
+              date: new Date()
+            }]
           });
+          await customer.save();
+          replyMessage = `🆕 NEW CUSTOMER!\n👤 ${nameToUse}\n🛒 ${quantity || 1} ${itemName || "item"} - ₹${amount}\n📊 Due: ₹${customer.totalDue}`;
         } else {
-          console.log(`📝 Adding transaction to existing customer: ${nameToUse}`);
-          if (phoneNumber && !customer.phone) customer.phone = phoneNumber;
-
           customer.transactions.push({
             itemName: itemName || "item",
             quantity: quantity || 1,
             amount: amount,
             paid: paid || 0,
             transactionType: "debit",
-            originalMessage: originalMessage || message,
-            date: new Date(),
+            originalMessage: message,
+            date: new Date()
           });
           customer.totalAmount += amount;
           customer.totalPaid += paid || 0;
           customer.totalDue = customer.totalAmount - customer.totalPaid;
+          await customer.save();
+          replyMessage = `✅ ADDED!\n🛒 ${quantity || 1} ${itemName || "item"} - ₹${amount}\n📊 ${nameToUse} Due: ₹${customer.totalDue}`;
         }
-
-        console.log("💾 Saving customer to database...");
-        await customer.save();
-        console.log(`✅ Saved! Customer: ${customer.name}, Due: ₹${customer.totalDue}`);
-
-        replyMessage = isNew
-          ? `🆕 *NEW CUSTOMER!*\n👤 ${nameToUse}\n📱 Phone: ${customer.phone || "N/A"}\n🛒 ${quantity || 1} ${itemName || "item"} — ₹${amount}\n📊 Due: ₹${customer.totalDue}`
-          : `✅ *ADDED!*\n🛒 ${quantity || 1} ${itemName || "item"} — ₹${amount}\n📊 ${nameToUse} Due: ₹${customer.totalDue}`;
       }
     }
-
-    console.log(`📤 Sending reply: ${replyMessage.substring(0, 80)}...`);
+    
+    console.log(`📤 Sending reply: ${replyMessage.substring(0, 80)}`);
     await sendWhatsAppMessage(phoneNumber, replyMessage);
-    console.log("✅ Reply sent successfully");
-
+    
   } catch (error) {
-    console.error("❌ Error in processMessage:", error.message);
-    console.error("Full error:", error);
-    console.error("Stack trace:", error.stack);
+    console.error("❌ Error processing message:", error.message);
+    console.error(error.stack);
     try {
       await sendWhatsAppMessage(phoneNumber, "❌ Server error. Please try again.");
     } catch (sendError) {
-      console.error("❌ Failed to send error reply:", sendError.message);
+      console.error("Failed to send error reply:", sendError.message);
     }
   }
 }
@@ -302,39 +230,27 @@ async function processMessage(phoneNumber, whatsappProfileName, message) {
 async function sendWhatsAppMessage(to, message) {
   try {
     const url = `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`;
-
-    console.log(`📤 Sending to WhatsApp API...`);
-    console.log(`📤 URL: ${url}`);
-    console.log(`📤 To: ${to}`);
-    console.log(`📤 Message: ${message.substring(0, 100)}`);
-
-    const response = await axios.post(
-      url,
-      {
-        messaging_product: "whatsapp",
-        to: to,
-        type: "text",
-        text: { body: message },
+    
+    const response = await axios.post(url, {
+      messaging_product: "whatsapp",
+      to: to,
+      type: "text",
+      text: { body: message }
+    }, {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json"
       },
-      {
-        headers: {
-          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        timeout: 10000,
-      }
-    );
-
-    console.log(`✅ Message sent successfully to ${to}`);
-    console.log(`✅ Message ID: ${response.data.messages?.[0]?.id}`);
+      timeout: 10000
+    });
+    
+    console.log(`✅ Message sent to ${to}`);
     return response.data;
   } catch (error) {
-    console.error("❌ Failed to send WhatsApp message:");
+    console.error("❌ Failed to send message:");
     if (error.response) {
       console.error("Status:", error.response.status);
-      console.error("Data:", JSON.stringify(error.response.data, null, 2));
-    } else {
-      console.error("Error:", error.message);
+      console.error("Data:", error.response.data);
     }
     throw error;
   }
