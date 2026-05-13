@@ -26,58 +26,58 @@ export function verifyWebhook(req, res) {
 }
 
 export async function handleIncomingMessage(req, res) {
-  // Always respond 200 first
-  res.sendStatus(200);
+  console.log("🔥 POST WEBHOOK HIT");
 
   try {
-    console.log("=".repeat(60));
-    console.log("📨 WEBHOOK RECEIVED");
-    console.log("Time:", new Date().toISOString());
-    
+    console.log("🔥 RAW BODY:");
+    console.log(JSON.stringify(req.body, null, 2));
+
     const body = req.body;
-    console.log("Full body received");
 
     const entry = body.entry?.[0];
-    if (!entry) {
-      console.log("No entry in webhook");
-      return;
-    }
+    console.log("🔥 ENTRY:", entry);
 
-    const changes = entry.changes?.[0];
-    if (!changes) {
-      console.log("No changes in webhook");
-      return;
-    }
+    const changes = entry?.changes?.[0];
+    console.log("🔥 CHANGES:", changes);
 
-    const value = changes.value;
+    const value = changes?.value;
+    console.log("🔥 VALUE:", value);
 
-    if (value.messages && value.messages.length > 0) {
+    if (value?.messages && value.messages.length > 0) {
+      console.log("✅ MESSAGE ARRAY FOUND");
+
       const message = value.messages[0];
-
-      if (message.type !== "text" || !message.text?.body) {
-        console.log("⚠️ Skipping non-text message:", message.type);
-        return;
-      }
+      console.log("🔥 MESSAGE:", message);
 
       const contact = value.contacts?.[0];
+      console.log("🔥 CONTACT:", contact);
+
       const customerNumber = message.from;
       const whatsappProfileName = contact?.profile?.name || "Customer";
-      const messageText = message.text.body;
+      const messageText = message.text?.body;
 
-      console.log(`✅ TEXT MESSAGE FOUND!`);
-      console.log(`📱 Customer: ${whatsappProfileName} (${customerNumber})`);
-      console.log(`💬 Message: "${messageText}"`);
+      console.log("📱 Number:", customerNumber);
+      console.log("👤 Name:", whatsappProfileName);
+      console.log("💬 Text:", messageText);
 
-      // Process the message directly
-      await processDirectMessage(customerNumber, whatsappProfileName, messageText);
-    } else if (value.statuses) {
-      console.log(`ℹ️ Status update: ${value.statuses[0]?.status}`);
+      await processDirectMessage(
+        customerNumber,
+        whatsappProfileName,
+        messageText
+      );
+
+      console.log("✅ processDirectMessage FINISHED");
     } else {
-      console.log("ℹ️ Other webhook type:", Object.keys(value));
+      console.log("❌ NO MESSAGES FOUND");
     }
+
+    res.sendStatus(200);
+
   } catch (error) {
-    console.error("❌ Webhook processing error:", error.message);
-    console.error(error.stack);
+    console.error("❌ FULL WEBHOOK ERROR:");
+    console.error(error);
+
+    res.sendStatus(500);
   }
 }
 
