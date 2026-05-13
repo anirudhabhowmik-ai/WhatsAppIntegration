@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import crypto from "crypto"; // ✅ FIXED: Added missing crypto import
 
 const shopkeeperSchema = new mongoose.Schema(
   {
@@ -64,7 +65,7 @@ const shopkeeperSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Generate unique API key before saving
+// ✅ FIXED: Added `next` parameter and calling next() at the end
 shopkeeperSchema.pre("save", async function(next) {
   if (!this.apiKey) {
     this.apiKey = crypto.randomBytes(32).toString("hex");

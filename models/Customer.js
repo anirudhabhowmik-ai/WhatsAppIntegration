@@ -29,8 +29,10 @@ const customerSchema = new mongoose.Schema(
 
 customerSchema.index({ shopkeeperId: 1, name: 1 }, { unique: true });
 
-customerSchema.pre("save", function() {
+// ✅ FIXED: Added `next` parameter and calling next() at the end
+customerSchema.pre("save", function(next) {
   this.totalDue = this.totalAmount - this.totalPaid;
+  next();
 });
 
 const Customer = mongoose.model("Customer", customerSchema);
