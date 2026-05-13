@@ -1,5 +1,5 @@
 import express from "express";
-import { verifyWebhook, handleIncomingMessage } from "../services/whatsappService.js";
+import { verifyWebhook, handleIncomingMessage } from "../services/WhatsappService.js";
 
 const router = express.Router();
 
@@ -26,6 +26,14 @@ router.get("/webhook", (req, res) => {
 });
 
 // POST - Receive WhatsApp messages
-router.post("/webhook", handleIncomingMessage);
+router.post("/webhook", async (req, res) => {
+  try {
+    await handleIncomingMessage(req, res);
+    return res.sendStatus(200);
+  } catch (err) {
+    console.error("Webhook error:", err);
+    return res.sendStatus(200); // ALWAYS 200 for Meta
+  }
+});
 
 export default router;
