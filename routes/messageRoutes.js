@@ -104,9 +104,9 @@ router.post("/", async (req, res) => {
     
     // PAYMENT
     if (intent.intent === 'payment') {
-      const amount = intent.amount;
+      const paymentAmount = intent.amount;
       
-      if (!effectiveName || !amount) {
+      if (!effectiveName || !paymentAmount) {
         return res.json({ success: false, message: "Please specify customer and amount. Example: pay Ravi 20" });
       }
       
@@ -122,36 +122,37 @@ router.post("/", async (req, res) => {
       const prevDue = customer.totalDue;
       customer.transactions.push({
         itemName: "Payment Received",
-        amount: amount,
-        paid: amount,
+        amount: paymentAmount,
+        paid: paymentAmount,
         transactionType: "payment",
         originalMessage: message,
         date: new Date(),
       });
-      customer.totalPaid += amount;
-      customer.totalAmount += amount;
+      customer.totalPaid += paymentAmount;
+      customer.totalAmount += paymentAmount;
       await customer.save();
       
       return res.json({ 
         success: true, 
-        message: `✅ Payment received! ${customer.name} paid ₹${amount}\nPrevious Due: ₹${prevDue}\nNew Due: ₹${customer.totalDue}`
+        message: `✅ Payment received! ${customer.name} paid ₹${paymentAmount}\nPrevious Due: ₹${prevDue}\nNew Due: ₹${customer.totalDue}`
       });
     }
     
     // ADD TRANSACTION
-    const { customerName, itemName, quantity, amount, paid } = intent;
+    const { customerName: intentCustomerName, itemName, quantity, amount, paid } = intent;
+    const finalCustomerName = intentCustomerName;
     
     if (!amount || amount === 0) {
       return res.json({ success: false, message: "Could not understand. Try: Ravi 2 milk 40" });
     }
     
-    let customer = await Customer.findOne({ shopkeeperId, name: new RegExp(`^${customerName}$`, "i") });
+    let customer = await Customer.findOne({ shopkeeperId, name: new RegExp(`^${finalCustomerName}$`, "i") });
     const isNew = !customer;
     
     if (isNew) {
       customer = new Customer({
         shopkeeperId,
-        name: customerName,
+        name: finalCustomerName,
         phone: customerPhone || null,
         totalAmount: amount,
         totalPaid: paid || 0,
@@ -190,8 +191,8 @@ router.post("/", async (req, res) => {
     return res.json({ 
       success: true, 
       message: isNew 
-        ? `🆕 New customer: ${customerName}\n${quantity || 1} ${itemName || "item"} - ₹${amount}\nDue: ₹${customer.totalDue}`
-        : `✅ Added: ${quantity || 1} ${itemName || "item"} - ₹${amount}\n${customerName} Due: ₹${customer.totalDue}`
+        ? `🆕 New customer: ${finalCustomerName}\n${quantity || 1} ${itemName || "item"} - ₹${amount}\nDue: ₹${customer.totalDue}`
+        : `✅ Added: ${quantity || 1} ${itemName || "item"} - ₹${amount}\n${finalCustomerName} Due: ₹${customer.totalDue}`
     });
     
   } catch (error) {
