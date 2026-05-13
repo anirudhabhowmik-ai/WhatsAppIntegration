@@ -7,8 +7,7 @@ import Shopkeeper from "../models/Shopkeeper.js";
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
-const WHATSAPP_BUSINESS_ACCOUNT_ID =
-  process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || "1288881096667837";
+const WHATSAPP_BUSINESS_ACCOUNT_ID = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || "1288881096667837";
 
 export function verifyWebhook(req, res) {
   const mode = req.query["hub.mode"];
@@ -27,24 +26,34 @@ export function verifyWebhook(req, res) {
 }
 
 export async function handleIncomingMessage(req, res) {
+  // Always respond 200 first
   res.sendStatus(200);
 
   try {
     console.log("=".repeat(60));
     console.log("📨 WEBHOOK RECEIVED");
     console.log("Time:", new Date().toISOString());
-
+    console.log("Full body keys:", Object.keys(req.body));
+    
     const body = req.body;
     const entry = body.entry?.[0];
-    if (!entry) return;
+    if (!entry) {
+      console.log("No entry in webhook");
+      return;
+    }
 
     const changes = entry.changes?.[0];
-    if (!changes) return;
+    if (!changes) {
+      console.log("No changes in webhook");
+      return;
+    }
 
     const value = changes.value;
+    console.log("Value keys:", Object.keys(value));
 
     if (value.messages && value.messages.length > 0) {
       const message = value.messages[0];
+      console.log("Message type:", message.type);
 
       if (message.type !== "text" || !message.text?.body) {
         console.log("⚠️ Skipping non-text message:", message.type);
@@ -63,9 +72,12 @@ export async function handleIncomingMessage(req, res) {
       await processMessage(customerNumber, whatsappProfileName, messageText);
     } else if (value.statuses) {
       console.log(`ℹ️ Status update: ${value.statuses[0]?.status}`);
+    } else {
+      console.log("Other webhook data:", Object.keys(value));
     }
   } catch (error) {
     console.error("❌ Webhook processing error:", error.message);
+    console.error(error.stack);
   }
 }
 
@@ -73,79 +85,80 @@ async function processMessage(phoneNumber, whatsappProfileName, message) {
   try {
     console.log("=".repeat(60));
     console.log("📝 PROCESSING MESSAGE DIRECTLY");
-
+    console.log("Phone:", phoneNumber);
+    console.log("Profile Name:", whatsappProfileName);
+    console.log("Message:", message);
+    
     // ✅ AUTO-CREATE OR GET SHOPKEEPER
     const businessPhoneNumber = "15551644565"; // Your WhatsApp Business number
-    let shopkeeper = await Shopkeeper.findOne({
-      phoneNumber: businessPhoneNumber,
-    });
-
+    console.log(`Looking for shopkeeper with phone: ${businessPhoneNumber}`);
+    
+    let shopkeeper = await Shopkeeper.findOne({ phoneNumber: businessPhoneNumber });
+    
     if (!shopkeeper) {
       console.log("🆕 No shopkeeper found. Creating one automatically...");
-      shopkeeper = new Shopkeeper({
-        whatsappBusinessAccountId: WHATSAPP_BUSINESS_ACCOUNT_ID,
-        phoneNumber: businessPhoneNumber,
-        shopName: "My WhatsApp Store",
-        ownerName: whatsappProfileName || "Store Owner",
-        email: "store@example.com",
-        apiKey: crypto.randomBytes(32).toString("hex"),
-        isActive: true,
-      });
-      await shopkeeper.save();
-      console.log(
-        `✅ Shopkeeper created: ${shopkeeper.shopName} (ID: ${shopkeeper._id})`,
-      );
+      try {
+        shopkeeper = new Shopkeeper({
+          whatsappBusinessAccountId: WHATSAPP_BUSINESS_ACCOUNT_ID,
+          phoneNumber: businessPhoneNumber,
+          shopName: "My WhatsApp Store",
+          ownerName: whatsappProfileName || "Store Owner",
+          email: "store@example.com",
+          apiKey: crypto.randomBytes(32).toString("hex"),
+          isActive: true
+        });
+        await shopkeeper.save();
+        console.log(`✅ Shopkeeper created: ${shopkeeper.shopName} (ID: ${shopkeeper._id})`);
+      } catch (saveError) {
+        console.error("❌ Error creating shopkeeper:", saveError.message);
+        throw saveError;
+      }
+    } else {
+      console.log(`✅ Found existing shopkeeper: ${shopkeeper.shopName} (ID: ${shopkeeper._id})`);
     }
-
+    
     const shopkeeperId = shopkeeper._id.toString();
-    console.log(
-      `🏪 Using shopkeeper: ${shopkeeper.shopName} (${shopkeeperId})`,
-    );
-
+    console.log(`🏪 Using shopkeeper ID: ${shopkeeperId}`);
+    
     // Parse the message using AI
+    console.log("Calling parseMessage...");
     const parsed = await parseMessage(message);
-    console.log("📊 Parsed result:", parsed);
+    console.log("📊 Parsed result:", JSON.stringify(parsed, null, 2));
 
     let replyMessage = "";
 
     // ── LIST CUSTOMERS ───────────────────────────────────────────────────
-    if (
-      parsed.command === "list_customers" ||
-      parsed.intent === "list_customers"
-    ) {
-      const customers = await Customer.find({ shopkeeperId }).sort({
-        createdAt: -1,
-      });
+    if (parsed.command === "list_customers" || parsed.intent === "list_customers") {
+      console.log("Processing LIST CUSTOMERS");
+      const customers = await Customer.find({ shopkeeperId }).sort({ createdAt: -1 });
       if (!customers.length) {
         replyMessage = "📭 No customers yet. Add: *Ravi 2 milk 40 rs*";
       } else {
-        const lines = customers.map(
-          (c, i) => `${i + 1}. *${c.name}* — ₹${c.totalDue}`,
-        );
+        const lines = customers.map((c, i) => `${i + 1}. *${c.name}* — ₹${c.totalDue}`);
         const totalDue = customers.reduce((s, c) => s + c.totalDue, 0);
         replyMessage = `👥 *CUSTOMERS* (${customers.length})\n${lines.join("\n")}\n📊 Total Due: ₹${totalDue}`;
       }
     }
-
+    
     // ── SUMMARY ──────────────────────────────────────────────────────────
     else if (parsed.command === "summary" || parsed.intent === "summary") {
+      console.log("Processing SUMMARY");
       const customers = await Customer.find({ shopkeeperId });
-      const totalAmount = customers.reduce(
-        (s, c) => s + (c.totalAmount || 0),
-        0,
-      );
+      const totalAmount = customers.reduce((s, c) => s + (c.totalAmount || 0), 0);
       const totalPaid = customers.reduce((s, c) => s + (c.totalPaid || 0), 0);
       const totalDue = customers.reduce((s, c) => s + (c.totalDue || 0), 0);
       replyMessage = `📊 *SHOP SUMMARY*\n━━━━━━━━━━━━━━━━━━━━\n👥 Customers: ${customers.length}\n🛒 Total Sales: ₹${totalAmount}\n✅ Collected: ₹${totalPaid}\n🔴 Total Due: ₹${totalDue}`;
     }
-
+    
     // ── HELP ─────────────────────────────────────────────────────────────
     else if (parsed.command === "help" || parsed.intent === "help") {
+      console.log("Processing HELP");
       replyMessage = `📖 *COMMANDS (Any Language)*\n━━━━━━━━━━━━━━━━━━━━\n🛒 Add: Ravi 2 milk 40\n💵 Pay: pay Ravi 20\n🔍 Due: Ravi pending\n📋 List: list\n📊 Summary: summary\n❓ Help: help`;
     }
-
+    
     // ── CHECK DUE ────────────────────────────────────────────────────────
     else if (parsed.command === "check_due" || parsed.intent === "check_due") {
+      console.log("Processing CHECK DUE");
       const name = parsed.customerName;
       if (!name) {
         replyMessage = "❌ Please specify customer name.";
@@ -161,22 +174,21 @@ async function processMessage(phoneNumber, whatsappProfileName, message) {
             customer.phone = phoneNumber;
             await customer.save();
           }
-          replyMessage =
-            customer.totalDue === 0
-              ? `✅ *${customer.name}* has no pending dues!`
-              : `💰 *${customer.name}* owes ₹${customer.totalDue}`;
+          replyMessage = customer.totalDue === 0
+            ? `✅ *${customer.name}* has no pending dues!`
+            : `💰 *${customer.name}* owes ₹${customer.totalDue}`;
         }
       }
     }
-
+    
     // ── PAYMENT ──────────────────────────────────────────────────────────
     else if (parsed.command === "payment" || parsed.intent === "payment") {
+      console.log("Processing PAYMENT");
       const name = parsed.customerName;
       const amount = parsed.amount;
 
       if (!name || !amount) {
-        replyMessage =
-          "❌ Please specify customer name and amount. Example: 'pay Ravi 20'";
+        replyMessage = "❌ Please specify customer name and amount. Example: 'pay Ravi 20'";
       } else {
         const customer = await Customer.findOne({
           shopkeeperId,
@@ -204,22 +216,16 @@ async function processMessage(phoneNumber, whatsappProfileName, message) {
         }
       }
     }
-
+    
     // ── ADD TRANSACTION (default) ────────────────────────────────────────
     else {
-      const {
-        customerName: parsedName,
-        itemName,
-        quantity,
-        amount,
-        paid,
-        originalMessage,
-      } = parsed;
+      console.log("Processing ADD TRANSACTION");
+      const { customerName: parsedName, itemName, quantity, amount, paid, originalMessage } = parsed;
 
       if (!amount || amount === 0) {
         replyMessage = "❌ Could not understand. Try: *Ravi 2 milk 40 rs*";
       } else {
-        const nameToUse = parsedName;
+        const nameToUse = parsedName || "Customer";
 
         console.log(`🔍 Looking for customer: ${nameToUse}`);
 
@@ -239,22 +245,18 @@ async function processMessage(phoneNumber, whatsappProfileName, message) {
             totalAmount: amount,
             totalPaid: paid || 0,
             totalDue: amount - (paid || 0),
-            transactions: [
-              {
-                itemName: itemName || "item",
-                quantity: quantity || 1,
-                amount: amount,
-                paid: paid || 0,
-                transactionType: "debit",
-                originalMessage: originalMessage || message,
-                date: new Date(),
-              },
-            ],
+            transactions: [{
+              itemName: itemName || "item",
+              quantity: quantity || 1,
+              amount: amount,
+              paid: paid || 0,
+              transactionType: "debit",
+              originalMessage: originalMessage || message,
+              date: new Date(),
+            }],
           });
         } else {
-          console.log(
-            `📝 Adding transaction to existing customer: ${nameToUse}`,
-          );
+          console.log(`📝 Adding transaction to existing customer: ${nameToUse}`);
           if (phoneNumber && !customer.phone) customer.phone = phoneNumber;
 
           customer.transactions.push({
@@ -271,10 +273,9 @@ async function processMessage(phoneNumber, whatsappProfileName, message) {
           customer.totalDue = customer.totalAmount - customer.totalPaid;
         }
 
+        console.log("💾 Saving customer to database...");
         await customer.save();
-        console.log(
-          `✅ Saved! Customer: ${customer.name}, Due: ₹${customer.totalDue}`,
-        );
+        console.log(`✅ Saved! Customer: ${customer.name}, Due: ₹${customer.totalDue}`);
 
         replyMessage = isNew
           ? `🆕 *NEW CUSTOMER!*\n👤 ${nameToUse}\n📱 Phone: ${customer.phone || "N/A"}\n🛒 ${quantity || 1} ${itemName || "item"} — ₹${amount}\n📊 Due: ₹${customer.totalDue}`
@@ -282,16 +283,16 @@ async function processMessage(phoneNumber, whatsappProfileName, message) {
       }
     }
 
-    console.log(`📤 Sending reply...`);
+    console.log(`📤 Sending reply: ${replyMessage.substring(0, 80)}...`);
     await sendWhatsAppMessage(phoneNumber, replyMessage);
+    console.log("✅ Reply sent successfully");
+
   } catch (error) {
-    console.error("❌ Error processing message:", error.message);
-    console.error(error.stack);
+    console.error("❌ Error in processMessage:", error.message);
+    console.error("Full error:", error);
+    console.error("Stack trace:", error.stack);
     try {
-      await sendWhatsAppMessage(
-        phoneNumber,
-        "❌ Server error. Please try again.",
-      );
+      await sendWhatsAppMessage(phoneNumber, "❌ Server error. Please try again.");
     } catch (sendError) {
       console.error("❌ Failed to send error reply:", sendError.message);
     }
@@ -303,6 +304,7 @@ async function sendWhatsAppMessage(to, message) {
     const url = `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`;
 
     console.log(`📤 Sending to WhatsApp API...`);
+    console.log(`📤 URL: ${url}`);
     console.log(`📤 To: ${to}`);
     console.log(`📤 Message: ${message.substring(0, 100)}`);
 
@@ -320,16 +322,19 @@ async function sendWhatsAppMessage(to, message) {
           "Content-Type": "application/json",
         },
         timeout: 10000,
-      },
+      }
     );
 
     console.log(`✅ Message sent successfully to ${to}`);
+    console.log(`✅ Message ID: ${response.data.messages?.[0]?.id}`);
     return response.data;
   } catch (error) {
     console.error("❌ Failed to send WhatsApp message:");
     if (error.response) {
       console.error("Status:", error.response.status);
       console.error("Data:", JSON.stringify(error.response.data, null, 2));
+    } else {
+      console.error("Error:", error.message);
     }
     throw error;
   }
