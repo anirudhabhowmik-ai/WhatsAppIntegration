@@ -33,7 +33,7 @@ const fallbackParseMessage = (message) => {
   // paid: look for "paid X" pattern
   const paidMatch = message.match(/paid\s+(\d+)/i);
   const paid = paidMatch ? parseInt(paidMatch[1]) : 0;
-  
+
   // Detect intent for fallback
   let intent = "add_transaction";
   const lowerMsg = message.toLowerCase();
@@ -59,7 +59,7 @@ const fallbackParseMessage = (message) => {
     paid,
     totalDue: amount - paid,
     originalMessage: message,
-    intent,  // Added intent field
+    intent,
   };
 };
 
@@ -71,31 +71,31 @@ const parseMessage = async (message) => {
   if (lower === "list" || lower === "customers") {
     return { command: "list_customers", intent: "list_customers" };
   }
-  
+
   if (lower === "summary" || lower === "total" || lower === "report") {
     return { command: "summary", intent: "summary" };
   }
-  
+
   if (lower === "help" || lower === "commands" || lower === "menu") {
     return { command: "help", intent: "help" };
   }
 
   const dueMatch = message.match(/^due\s+(.+)$/i);
   if (dueMatch) {
-    return { 
-      command: "check_due", 
+    return {
+      command: "check_due",
       customerName: dueMatch[1].trim(),
-      intent: "check_due"
+      intent: "check_due",
     };
   }
 
   const payMatch = message.match(/^pay\s+(\S+)\s+(\d+)/i);
   if (payMatch) {
-    return { 
-      command: "payment", 
-      customerName: payMatch[1], 
+    return {
+      command: "payment",
+      customerName: payMatch[1],
       amount: parseInt(payMatch[2]),
-      intent: "payment"
+      intent: "payment",
     };
   }
 
@@ -128,10 +128,17 @@ Examples:
 "Amit 2 bread 50 paid 20" → {"customerName":"Amit","phone":"","itemName":"bread","itemDescription":"white bread","quantity":2,"amount":50,"paid":20,"totalDue":30,"intent":"add_transaction"}
 `;
 
-    const result   = await model.generateContent(prompt);
-    const text     = result.response.text();
-    const cleaned  = (text.match(/\{[\s\S]*\}/) || ["{}"])[0];
-    const parsed   = JSON.parse(cleaned);
+    // ✅ FIXED: Added 8s timeout — if Gemini hangs, fallback parser is used
+    const result = await Promise.race([
+      model.generateContent(prompt),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Gemini timeout after 8s")), 8000)
+      ),
+    ]);
+
+    const text    = result.response.text();
+    const cleaned = (text.match(/\{[\s\S]*\}/) || ["{}"])[0];
+    const parsed  = JSON.parse(cleaned);
 
     console.log("✅ Gemini parsed:", parsed);
 
@@ -149,6 +156,7 @@ Examples:
     };
   } catch (err) {
     console.error("❌ Gemini error:", err.message);
+    // ✅ Fallback parser is used if Gemini times out or fails for any reason
     return fallbackParseMessage(message);
   }
 };
