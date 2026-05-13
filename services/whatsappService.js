@@ -27,11 +27,13 @@ export async function handleIncomingMessage(req, res) {
     // Always respond with 200 first
     res.sendStatus(200);
 
-    const body = req.body;
     console.log("=".repeat(60));
     console.log("📨 WEBHOOK RECEIVED");
     console.log("Time:", new Date().toISOString());
+    console.log("RAW BODY:", JSON.stringify(req.body, null, 2));
     console.log("=".repeat(60));
+
+    const body = req.body;
 
     // Extract the message from the webhook
     const entry = body.entry?.[0];
@@ -51,25 +53,29 @@ export async function handleIncomingMessage(req, res) {
     // Check if this contains a message
     if (value.messages && value.messages.length > 0) {
       const message = value.messages[0];
-      const contact = value.contacts?.[0];
 
+      // Only process text messages
+      if (message.type !== "text" || !message.text?.body) {
+        console.log("⚠️ Skipping non-text message:", message.type);
+        return;
+      }
+
+      const contact = value.contacts?.[0];
       const customerNumber = message.from;
       const customerName = contact?.profile?.name || "Customer";
-      const messageText = message.text?.body;
+      const messageText = message.text.body; // now guaranteed to exist
 
+      console.log(`✅ TEXT MESSAGE FOUND!`);
       console.log(`📱 Customer: ${customerName} (${customerNumber})`);
       console.log(`💬 Message: "${messageText}"`);
-      console.log(`📝 Type: ${message.type}`);
 
       // Process the message
       await processMessage(customerNumber, customerName, messageText);
     } else if (value.statuses) {
       console.log(`ℹ️ Status update: ${value.statuses[0]?.status}`);
     } else {
-      console.log("ℹ️ Other webhook type");
+      console.log("ℹ️ Other webhook type:", Object.keys(value));
     }
-
-    console.log("=".repeat(60));
   } catch (error) {
     console.error("❌ Webhook error:", error.message);
     console.error(error.stack);
@@ -78,29 +84,46 @@ export async function handleIncomingMessage(req, res) {
 
 async function processMessage(phoneNumber, customerName, messageText) {
   try {
-    console.log(`🔄 Calling /message endpoint...`);
-
-    const response = await axios.post(`${API_URL}/message`, {
+    console.log(`🔄 Calling /message endpoint at ${API_URL}/message`);
+    console.log(`📤 Payload:`, {
       message: messageText,
       customerPhone: phoneNumber,
       customerName: customerName,
       shopkeeperId: "default",
     });
 
+    const response = await axios.post(
+      `${API_URL}/message`,
+      {
+        message: messageText,
+        customerPhone: phoneNumber,
+        customerName: customerName,
+        shopkeeperId: "default",
+      },
+      {
+        timeout: 30000,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      },
+    );
+
     console.log(`📊 Response status: ${response.status}`);
-    console.log(`📊 Response:`, response.data);
+    console.log(`📊 Response data:`, response.data);
 
     if (response.data.success) {
       console.log(`✅ Sending reply to ${phoneNumber}`);
       await sendWhatsAppMessage(phoneNumber, response.data.message);
     } else {
-      console.log(`❌ Error: ${response.data.message}`);
+      console.log(`❌ Error from message endpoint: ${response.data.message}`);
       await sendWhatsAppMessage(phoneNumber, `❌ ${response.data.message}`);
     }
   } catch (error) {
-    console.error("❌ Error calling /message endpoint:", error.message);
+    console.error("❌ Error calling /message endpoint:");
+    console.error("Message:", error.message);
     if (error.response) {
-      console.error("Response:", error.response.data);
+      console.error("Response status:", error.response.status);
+      console.error("Response data:", error.response.data);
     }
     await sendWhatsAppMessage(
       phoneNumber,
@@ -114,6 +137,8 @@ async function sendWhatsAppMessage(to, message) {
     const url = `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`;
 
     console.log(`📤 Sending to WhatsApp API...`);
+    console.log(`📤 To: ${to}`);
+    console.log(`📤 Message: ${message.substring(0, 100)}`);
 
     const response = await axios.post(
       url,
