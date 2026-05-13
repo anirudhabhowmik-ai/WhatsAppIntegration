@@ -33,6 +33,21 @@ const fallbackParseMessage = (message) => {
   // paid: look for "paid X" pattern
   const paidMatch = message.match(/paid\s+(\d+)/i);
   const paid = paidMatch ? parseInt(paidMatch[1]) : 0;
+  
+  // Detect intent for fallback
+  let intent = "add_transaction";
+  const lowerMsg = message.toLowerCase();
+  if (lowerMsg.includes("pending") || lowerMsg.includes("baki") || lowerMsg.includes("due")) {
+    intent = "check_due";
+  } else if (lowerMsg.includes("pay") || lowerMsg.includes("paid")) {
+    intent = "payment";
+  } else if (lowerMsg === "list" || lowerMsg === "customers") {
+    intent = "list_customers";
+  } else if (lowerMsg === "summary" || lowerMsg === "total") {
+    intent = "summary";
+  } else if (lowerMsg === "help" || lowerMsg === "commands") {
+    intent = "help";
+  }
 
   return {
     customerName,
@@ -44,21 +59,45 @@ const fallbackParseMessage = (message) => {
     paid,
     totalDue: amount - paid,
     originalMessage: message,
+    intent,  // Added intent field
   };
 };
 
 // ── Gemini parser ─────────────────────────────────────────────────────────────
 const parseMessage = async (message) => {
-  // Special commands: "list", "due <name>", "pay <name> <amount>"
   const lower = message.trim().toLowerCase();
 
-  if (lower === "list") return { command: "list" };
+  // Special command detection (no AI needed)
+  if (lower === "list" || lower === "customers") {
+    return { command: "list_customers", intent: "list_customers" };
+  }
+  
+  if (lower === "summary" || lower === "total" || lower === "report") {
+    return { command: "summary", intent: "summary" };
+  }
+  
+  if (lower === "help" || lower === "commands" || lower === "menu") {
+    return { command: "help", intent: "help" };
+  }
 
   const dueMatch = message.match(/^due\s+(.+)$/i);
-  if (dueMatch) return { command: "due", customerName: dueMatch[1].trim() };
+  if (dueMatch) {
+    return { 
+      command: "check_due", 
+      customerName: dueMatch[1].trim(),
+      intent: "check_due"
+    };
+  }
 
   const payMatch = message.match(/^pay\s+(\S+)\s+(\d+)/i);
-  if (payMatch) return { command: "pay", customerName: payMatch[1], amount: parseInt(payMatch[2]) };
+  if (payMatch) {
+    return { 
+      command: "payment", 
+      customerName: payMatch[1], 
+      amount: parseInt(payMatch[2]),
+      intent: "payment"
+    };
+  }
 
   // Normal transaction — parse with Gemini
   try {
@@ -79,13 +118,14 @@ JSON format:
   "quantity": <number>,
   "amount": <total price in rupees, integer>,
   "paid": <amount paid if mentioned, else 0>,
-  "totalDue": <amount - paid>
+  "totalDue": <amount - paid>,
+  "intent": "add_transaction"
 }
 
 Examples:
-"Ravi 2 milk 40 rs" → {"customerName":"Ravi","phone":"","itemName":"milk","itemDescription":"fresh milk","quantity":2,"amount":40,"paid":0,"totalDue":40}
-"Suresh 9876543210 1kg rice 60 rs" → {"customerName":"Suresh","phone":"9876543210","itemName":"rice","itemDescription":"basmati rice","quantity":1,"amount":60,"paid":0,"totalDue":60}
-"Amit 2 bread 50 paid 20" → {"customerName":"Amit","phone":"","itemName":"bread","itemDescription":"white bread","quantity":2,"amount":50,"paid":20,"totalDue":30}
+"Ravi 2 milk 40 rs" → {"customerName":"Ravi","phone":"","itemName":"milk","itemDescription":"fresh milk","quantity":2,"amount":40,"paid":0,"totalDue":40,"intent":"add_transaction"}
+"Suresh 9876543210 1kg rice 60 rs" → {"customerName":"Suresh","phone":"9876543210","itemName":"rice","itemDescription":"basmati rice","quantity":1,"amount":60,"paid":0,"totalDue":60,"intent":"add_transaction"}
+"Amit 2 bread 50 paid 20" → {"customerName":"Amit","phone":"","itemName":"bread","itemDescription":"white bread","quantity":2,"amount":50,"paid":20,"totalDue":30,"intent":"add_transaction"}
 `;
 
     const result   = await model.generateContent(prompt);
@@ -105,6 +145,7 @@ Examples:
       paid:            parsed.paid            || 0,
       totalDue:        (parsed.amount || 0) - (parsed.paid || 0),
       originalMessage: message,
+      intent:          parsed.intent || "add_transaction",
     };
   } catch (err) {
     console.error("❌ Gemini error:", err.message);
