@@ -6,6 +6,13 @@ const router = express.Router();
 
 // ── MAIN ENDPOINT ── Uses parseMessage (which already has AI) ─────────────────
 router.post("/", async (req, res) => {
+  console.log("=".repeat(60));
+  console.log("🔥 /message ROUTER WAS CALLED! 🔥");
+  console.log("Time:", new Date().toISOString());
+  console.log("Request body:", JSON.stringify(req.body, null, 2));
+  console.log("Headers:", req.headers);
+  console.log("=".repeat(60));
+
   try {
     // Get data from WhatsApp webhook
     const {
@@ -15,29 +22,30 @@ router.post("/", async (req, res) => {
       shopkeeperId = "default",
     } = req.body;
 
-    console.log("=".repeat(60));
-    console.log("📝 MESSAGE RECEIVED IN ROUTER");
+    console.log("📝 PARSED DATA:");
     console.log("Message:", message);
     console.log("Customer Phone:", customerPhone);
     console.log("Provided Name:", providedName);
     console.log("Shopkeeper ID:", shopkeeperId);
-    console.log("=".repeat(60));
 
     if (!message) {
+      console.log("❌ No message in request!");
       return res
         .status(400)
         .json({ success: false, message: "Message is required" });
     }
 
     // Use parseMessage - it already has AI to understand the message
+    console.log("🤖 Calling parseMessage...");
     const parsed = await parseMessage(message);
-    console.log("📊 Parsed result:", parsed);
+    console.log("📊 Parsed result:", JSON.stringify(parsed, null, 2));
 
     // Handle special commands from parseService
     if (
       parsed.command === "list_customers" ||
       parsed.intent === "list_customers"
     ) {
+      console.log("📋 Processing LIST command");
       const customers = await Customer.find({ shopkeeperId }).sort({
         createdAt: -1,
       });
@@ -58,6 +66,7 @@ router.post("/", async (req, res) => {
     }
 
     if (parsed.command === "summary" || parsed.intent === "summary") {
+      console.log("📊 Processing SUMMARY command");
       const customers = await Customer.find({ shopkeeperId });
       const totalAmount = customers.reduce(
         (s, c) => s + (c.totalAmount || 0),
@@ -73,6 +82,7 @@ router.post("/", async (req, res) => {
     }
 
     if (parsed.command === "help" || parsed.intent === "help") {
+      console.log("❓ Processing HELP command");
       return res.json({
         success: true,
         message: `📖 *COMMANDS (Any Language)*\n━━━━━━━━━━━━━━━━━━━━\n🛒 Add: Ravi 2 milk 40\n💵 Pay: pay Ravi 20\n🔍 Due: Ravi pending\n📋 List: list\n📊 Summary: summary\n❓ Help: help`,
@@ -80,6 +90,7 @@ router.post("/", async (req, res) => {
     }
 
     if (parsed.command === "check_due" || parsed.intent === "check_due") {
+      console.log("💰 Processing CHECK DUE command");
       const customerName = parsed.customerName;
       if (!customerName) {
         return res.json({
@@ -114,6 +125,7 @@ router.post("/", async (req, res) => {
     }
 
     if (parsed.command === "payment" || parsed.intent === "payment") {
+      console.log("💵 Processing PAYMENT command");
       const customerName = parsed.customerName;
       const amount = parsed.amount;
 
@@ -160,17 +172,19 @@ router.post("/", async (req, res) => {
     }
 
     // ── DEFAULT: Add Transaction ─────────────────────────────────────────────
+    console.log("🛒 Processing ADD TRANSACTION (default)");
     const { customerName, itemName, quantity, amount, paid, originalMessage } =
       parsed;
 
     if (!amount || amount === 0) {
+      console.log("❌ No amount found in parsed data");
       return res.json({
         success: false,
         message: "❌ Could not understand. Try: *Ravi 2 milk 40 rs*",
       });
     }
 
-    // FIX: Use effectiveCustomerName (from WhatsApp profile) or parsed customerName
+    // Use effectiveCustomerName (from WhatsApp profile) or parsed customerName
     const nameToUse = providedName || customerName;
 
     console.log(`🔍 Looking for customer with name: ${nameToUse}`);
@@ -187,7 +201,7 @@ router.post("/", async (req, res) => {
       console.log(`🆕 Creating new customer: ${nameToUse}`);
       customer = new Customer({
         shopkeeperId,
-        name: nameToUse, // Use nameToUse instead of customerName
+        name: nameToUse,
         phone: customerPhone || null,
         totalAmount: amount,
         totalPaid: paid || 0,
@@ -224,6 +238,7 @@ router.post("/", async (req, res) => {
       customer.totalDue = customer.totalAmount - customer.totalPaid;
     }
 
+    console.log("💾 Saving to database...");
     await customer.save();
     console.log(
       `✅ Saved to MongoDB. Customer ID: ${customer._id}, Total Due: ${customer.totalDue}`,
@@ -237,6 +252,7 @@ router.post("/", async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error in message endpoint:", error);
+    console.error("Stack trace:", error.stack);
     res
       .status(500)
       .json({ success: false, message: "Server Error: " + error.message });
