@@ -1,5 +1,5 @@
 import express from "express";
-import { verifyWebhook, handleIncomingMessage } from "../services/WhatsappService.js";
+import { verifyWebhook, handleIncomingMessage } from "../services/whatsappService.js";
 
 const router = express.Router();
 
